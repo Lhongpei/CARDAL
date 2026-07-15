@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  source-hygiene:
+    name: Source hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate project metadata
+        run: |
+          python - <<'PY'
+          import pathlib
+          import tomllib
+
+          root = pathlib.Path(".")
+          data = tomllib.loads(root.joinpath("pyproject.toml").read_text())
+          project = data["project"]
+          assert project["name"] == "cardal"
+          assert project["license"] == "Apache-2.0"
+          assert root.joinpath("LICENSE").exists()
+          assert root.joinpath("CITATION.cff").exists()
+          for key in ("Homepage", "Repository", "Issues", "Documentation"):
+              assert key in project["urls"], key
+          PY
+
+      - name: Compile Python sources
+        run: python -m compileall -q python/cardal
+
+      - name: Check for stale private paths
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          pattern = re.compile(r"/home/sevan|/data0|/data1|loralm")
+          skipped_dirs = {".git", "build", ".pytest_cache", "__pycache__"}
+          hits = []
+          for path in pathlib.Path(".").rglob("*"):
+              if not path.is_file():
+                  continue
+              if any(part in skipped_dirs for part in path.parts):
+                  continue
+              if path == pathlib.Path(".github/workflows/ci.yml"):
+                  continue
+              try:
+                  text = path.read_text(errors="ignore")
+              except Exception:
+                  continue
+              for lineno, line in enumerate(text.splitlines(), 1):
+                  if pattern.search(line):
+                      hits.append(f"{path}:{lineno}: {line}")
+          if hits:
+              print("\n".join(hits))
+              sys.exit(1)
+          PY
+
+  cuda-smoke:
+    name: CUDA smoke build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64, cuda]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure single-GPU build
+        run: cmake -S . -B build -DENABLE_MPI=OFF -DCARDAL_BUILD_QUBO=OFF
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Run generated MaxCut smoke test
+        run: ./build/cardal -g maxcut,100,1e-2 -T 30 -v 1

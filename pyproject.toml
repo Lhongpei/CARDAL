@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hongpei Li
+
+[build-system]
+requires = [
+    "scikit-build-core>=0.9",
+    "pybind11>=2.11",
+    "pybind11-stubgen>=2.5",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "cardal"
+version = "0.0.1"
+description = "Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Hongpei Li", email = "ishongpeili@gmail.com" },
+]
+maintainers = [
+    { name = "Hongpei Li", email = "ishongpeili@gmail.com" },
+]
+keywords = ["semidefinite programming", "low-rank", "GPU", "CUDA", "MPI"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "numpy>=1.21",
+]
+
+[project.urls]
+Homepage = "https://github.com/Lhongpei/CARDAL"
+Repository = "https://github.com/Lhongpei/CARDAL"
+Issues = "https://github.com/Lhongpei/CARDAL/issues"
+Documentation = "https://github.com/Lhongpei/CARDAL#readme"
+
+[project.optional-dependencies]
+scipy = ["scipy>=1.8"]
+cvxpy = ["cvxpy>=1.4"]
+dev   = ["pytest>=7"]
+
+[tool.scikit-build]
+cmake.version = ">=3.20"
+cmake.build-type = "Release"
+build-dir = "build/{wheel_tag}"
+minimum-version = "0.9"
+wheel.packages = ["python/cardal"]
+
+# Ship the built .so into python/cardal/ alongside the pure-Python package.
+install.components = ["python"]
+
+# Config knobs for the top-level CMake — turns on the Python binding target,
+# turns off standalone CLI/tests/qubo targets to keep the wheel lean.
+[tool.scikit-build.cmake.define]
+CARDAL_BUILD_PYTHON = "ON"
+CARDAL_BUILD_CLI    = "OFF"
+CARDAL_BUILD_QUBO   = "OFF"
+ENABLE_MPI          = "OFF"      # single-GPU only in v0
+CMAKE_CUDA_STANDARD = "17"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["python/tests"]
+addopts = "-ra --strict-markers"
