@@ -80,7 +80,7 @@ The same `Model` is reusable: calling `m.read_file(...)` again swaps the underly
 
 ### From NumPy arrays
 
-`Model.set_problem()` accepts a list of dense `numpy` or `scipy.sparse` matrices per PSD block. As a worked example, the smallest-eigenvalue SDP for a symmetric matrix $H$ &mdash; $\min\langle H, X\rangle$ subject to $\operatorname{tr}(X)=1$, $X\succeq 0$ &mdash; whose optimum equals $\lambda_{\min}(H)$:
+`Model.set_problem()` accepts a list of dense `numpy` or `scipy.sparse` matrices per PSD block. As a worked example, the smallest-eigenvalue SDP for a symmetric matrix $H$ &mdash; $\min\langle H, X\rangle$ subject to $\mathrm{tr}(X)=1$, $X\succeq 0$ &mdash; whose optimum equals $\lambda_{\min}(H)$:
 
 ```python
 import numpy as np

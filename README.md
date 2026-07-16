@@ -16,7 +16,7 @@ $$
 \begin{aligned}
 \min_{X} \quad & \langle C, X \rangle \\
 \text{s.t.} \quad & \langle A_i, X \rangle = b_i, \quad i = 1,\dots,m, \\
-                  & X = \operatorname{blkdiag}(X_1, \dots, X_p, x_{\text{LP}}), \\
+                  & X = \mathrm{blkdiag}(X_1, \dots, X_p, x_{\text{LP}}), \\
                   & X_c \succeq 0 \text{ for } c=1,\dots,p, \qquad x_{\text{LP}} \ge 0.
 \end{aligned}
 $$
