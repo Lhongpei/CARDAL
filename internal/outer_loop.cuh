@@ -98,17 +98,16 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
   state->outer_iters_since_augment_check = 0;
   state->lbfgs_maxiter_streak = 0;
 
-  const int unified_loop = 1;
-  const int unified_gap_stall_k = 5;
-  const double unified_augment_pres_thresh = 1e-3;
-  const double unified_dual_gamma = 1.618;
-  const double unified_dual_gamma_pres_thresh = 1e-5;
-  const double unified_lancelot_pres_thresh = 1e-6;
-  const int unified_sentinel_throttle = 1;
-  const int unified_sentinel_gap_k = 3;
+  const int gap_stall_augment_iters = 5;
+  const double augment_primal_threshold = 1e-3;
+  const double dual_step_acceleration = 1.618;
+  const double dual_step_acceleration_threshold = 1e-5;
+  const double rho_jump_suppression_threshold = 1e-6;
+  const int sentinel_throttle_iters = 1;
+  const int sentinel_gap_stall_iters = 3;
   // After this many consecutive gate-pass outer iters with no progress,
-  // force a rho jump AND trigger augment. 0 disables.
-  const int unified_gate_pass_force_k = 10;
+  // force a rho jump and trigger augmentation.
+  const int gate_pass_force_iters = 10;
 
   state->termination_reason = TERMINATION_REASON_UNSPECIFIED;
   while (state->termination_reason == TERMINATION_REASON_UNSPECIFIED) {
@@ -118,40 +117,39 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
     COMPUTE_PRIMAL_RESIDUAL(state);
     COMPUTE_GRADIENT(state);
 
-    if (unified_loop) {
-      COMPUTE_OBJECTIVE_GAP(state);
-      state->absolute_primal_residual = compute_global_q0_norm(state);
-      state->relative_primal_residual =
-          state->absolute_primal_residual / denom_b;
-      double cur_p_res_u = state->relative_primal_residual;
-      double cur_gap_u = state->relative_objective_gap;
-      double gap_improvement_u = (state->last_outer_obj_gap > 1e-30)
-              ? (state->last_outer_obj_gap - cur_gap_u) /
-                    state->last_outer_obj_gap
-              : 1.0;
-      int gap_stalled_u = (gap_improvement_u < outer_stall_eps);
-      if (gap_stalled_u)
-        state->gap_stall_count++;
-      else
-        state->gap_stall_count = 0;
+    COMPUTE_OBJECTIVE_GAP(state);
+    state->absolute_primal_residual = compute_global_q0_norm(state);
+    state->relative_primal_residual =
+        state->absolute_primal_residual / denom_b;
+    double current_primal = state->relative_primal_residual;
+    double current_gap = state->relative_objective_gap;
+    double pre_gap_improvement =
+        (state->last_outer_obj_gap > 1e-30)
+            ? (state->last_outer_obj_gap - current_gap) /
+                  state->last_outer_obj_gap
+            : 1.0;
+    if (pre_gap_improvement < outer_stall_eps)
+      state->gap_stall_count++;
+    else
+      state->gap_stall_count = 0;
 
-      int augment_now = (state->gap_stall_count >= unified_gap_stall_k) &&
-                        (cur_p_res_u < unified_augment_pres_thresh);
-      if (augment_now) {
-        if (state->verbose >= 3)
-          printf("[unified-augment] gap_stall=%d p_res=%.2e -> ALORA\n",
-                 state->gap_stall_count, cur_p_res_u);
-        update_dual_slack_S(state);
-        CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(state);
-        state->gap_stall_count = 0;
-        state->last_outer_obj_gap = cur_gap_u;
-        state->last_outer_primal_norm = cur_p_res_u;
-        state->cumulative_time_sec =
-            (double)(clock() - start_time) / CLOCKS_PER_SEC;
-        state->num_outer_iteration++;
-        state->termination_reason = check_termination(state, params);
-        continue;  // skip middle loop, dual, LANCELOT for this iter
-      }
+    int augment_now =
+        (state->gap_stall_count >= gap_stall_augment_iters) &&
+        (current_primal < augment_primal_threshold);
+    if (augment_now) {
+      if (state->verbose >= 3)
+        printf("[augment] gap_stall=%d p_res=%.2e -> ALORA\n",
+               state->gap_stall_count, current_primal);
+      update_dual_slack_S(state);
+      CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(state);
+      state->gap_stall_count = 0;
+      state->last_outer_obj_gap = current_gap;
+      state->last_outer_primal_norm = current_primal;
+      state->cumulative_time_sec =
+          (double)(clock() - start_time) / CLOCKS_PER_SEC;
+      state->num_outer_iteration++;
+      state->termination_reason = check_termination(state, params);
+      continue;  // Skip middle loop, dual update, and rho update.
     }
 
     double prev_middle_primal = compute_global_q0_norm(state);
@@ -196,33 +194,21 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
       if (state->grid_context != NULL && state->grid_context->dims[2] > 1)
         sentinel_disabled = 1;
 #endif
-      const int sentinel_stall_trigger = 1;
-
       int inner_iters = ALM_INNER_SOLVER(state, tol);
       state->num_inner_iteration += inner_iters;
       inner_iters_total_this_round += inner_iters;
 
-      int rank_changed = (state->total_rank != state->sentinel_last_fire_rank);
-      int first_fire = (state->sentinel_last_fire_rank < 0);
-      int sentinel_should_fire;
-      if (unified_loop) {
-        int stationary = (state->lbfgs_exit_reason == LBFGS_GRAD_CONVERGED) ||
-                         (state->lbfgs_exit_reason == LBFGS_TAU_STALL);
-        int outer_stuck =
-            (state->gap_stall_count >= unified_sentinel_gap_k);
-        int iters_since_fire = (state->sentinel_last_fire_iter < 0)
-                                   ? INT_MAX
-                                   : (state->num_outer_iteration -
-                                      state->sentinel_last_fire_iter);
-        int throttle_ok = (iters_since_fire >= unified_sentinel_throttle);
-        sentinel_should_fire = stationary && outer_stuck && throttle_ok;
-      } else {
-        sentinel_should_fire =
-            (state->lbfgs_exit_reason == LBFGS_GRAD_CONVERGED) &&
-            (rank_changed || first_fire);
-        sentinel_should_fire = sentinel_should_fire ||
-            (state->outer_stall_count >= sentinel_stall_trigger);
-      }
+      int stationary = (state->lbfgs_exit_reason == LBFGS_GRAD_CONVERGED) ||
+                       (state->lbfgs_exit_reason == LBFGS_TAU_STALL);
+      int gap_stalled =
+          (state->gap_stall_count >= sentinel_gap_stall_iters);
+      int iters_since_fire =
+          (state->sentinel_last_fire_iter < 0)
+              ? INT_MAX
+              : (state->num_outer_iteration -
+                 state->sentinel_last_fire_iter);
+      int throttle_ok = (iters_since_fire >= sentinel_throttle_iters);
+      int sentinel_should_fire = stationary && gap_stalled && throttle_ok;
 #ifdef IS_DISTRIBUTED
       if (!sentinel_disabled && state->grid_context != NULL) {
         int local_fire = sentinel_should_fire ? 1 : 0;
@@ -235,7 +221,7 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
       if (!sentinel_disabled && sentinel_should_fire) {
         state->sentinel_last_fire_iter = state->num_outer_iteration;
         state->sentinel_last_fire_rank = state->total_rank;
-        if (unified_loop) state->gap_stall_count = 0;
+        state->gap_stall_count = 0;
         {
           const double post_esc_tol_factor = 0.01;
           double post_esc_tol = tol * post_esc_tol_factor;
@@ -263,9 +249,9 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
       }
 
       double dual_step = state->penalty_coef;
-      if (unified_loop &&
-          state->relative_primal_residual < unified_dual_gamma_pres_thresh) {
-        dual_step *= unified_dual_gamma;
+      if (state->relative_primal_residual <
+          dual_step_acceleration_threshold) {
+        dual_step *= dual_step_acceleration;
       }
       CUBLAS_CHECK(cublasDaxpy(state->blas_handle, state->num_constraints,
                                &dual_step, state->q0, 1,
@@ -301,57 +287,43 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
     double eta_floor =
         0.5 * params->termination_criteria.eps_primal_relative;
 
-    const int lancelot_disabled = 0;
-    const double monotone_rho_factor = 0.0;  // 0 = disabled
-    if (monotone_rho_factor > 1.0) {
-      state->penalty_coef *= monotone_rho_factor;
+    int allow_rho_jump = !eta_gate_passed;
+    if (allow_rho_jump &&
+        state->relative_primal_residual < rho_jump_suppression_threshold) {
+      allow_rho_jump = 0;
+    }
+    // BM rank deficiency can keep the primal residual below eta while the gap
+    // stalls. Force a rho jump and augmentation after repeated gate passes.
+    int force_combo = 0;
+    if (!allow_rho_jump) {
+      state->consecutive_gate_pass++;
+      if (state->consecutive_gate_pass >= gate_pass_force_iters) {
+        force_combo = 1;
+        state->consecutive_gate_pass = 0;
+      }
+    } else {
+      state->consecutive_gate_pass = 0;
+    }
+    if (force_combo || allow_rho_jump) {
+      const double rho_jump = 3.33;
+      state->penalty_coef *= rho_jump;
       if (params->max_penalty_coef > 0.0 &&
           state->penalty_coef > params->max_penalty_coef) {
         state->penalty_coef = params->max_penalty_coef;
       }
-    } else if (!lancelot_disabled) {
-      int allow_rho_jump = !eta_gate_passed;
-      if (unified_loop && allow_rho_jump &&
-          state->relative_primal_residual < unified_lancelot_pres_thresh) {
-        allow_rho_jump = 0;
-      }
-      // BM-specific safety: rank-deficiency means primal can stay below eta
-      // forever even though the gap doesn't close (LANCELOT assumes inner
-      // can be solved arbitrarily precise; BM can't if rank < rank(X*)).
-      // Count consecutive gate-pass iters; force rho jump + augment when
-      // we've passed for too long without real progress.
-      int force_combo = 0;
-      if (unified_loop && unified_gate_pass_force_k > 0 &&
-          !allow_rho_jump) {
-        state->consecutive_gate_pass++;
-        if (state->consecutive_gate_pass >= unified_gate_pass_force_k) {
-          force_combo = 1;
-          state->consecutive_gate_pass = 0;
-        }
-      } else if (allow_rho_jump) {
-        state->consecutive_gate_pass = 0;
-      }
-      if (force_combo || allow_rho_jump) {
-        const double rho_jump = 3.33;
-        state->penalty_coef *= rho_jump;
-        if (params->max_penalty_coef > 0.0 &&
-            state->penalty_coef > params->max_penalty_coef) {
-          state->penalty_coef = params->max_penalty_coef;
-        }
-        if (force_combo) {
-          state->force_augment_this_iter = 1;
-        } else {
-          state->gate_fail_streak++;
-        }
+      if (force_combo) {
+        state->force_augment_this_iter = 1;
       } else {
-        double new_eta = 0.5 * state->lancelot_eta;
-        if (new_eta < rel_q0_for_gate)
-          new_eta = rel_q0_for_gate;
-        if (new_eta < eta_floor)
-          new_eta = eta_floor;
-        state->lancelot_eta = new_eta;
-        state->gate_fail_streak = 0;
+        state->gate_fail_streak++;
       }
+    } else {
+      double new_eta = 0.5 * state->lancelot_eta;
+      if (new_eta < rel_q0_for_gate)
+        new_eta = rel_q0_for_gate;
+      if (new_eta < eta_floor)
+        new_eta = eta_floor;
+      state->lancelot_eta = new_eta;
+      state->gate_fail_streak = 0;
     }
 
     COMPUTE_OBJECTIVE_GAP(state);
