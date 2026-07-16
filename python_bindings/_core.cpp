@@ -74,7 +74,8 @@ params_from_dict(const py::dict &d) {
 
     static const std::vector<std::string> known_keys = {
         "eps_optimal_relative",
-        "eps_feasible_relative",
+        "eps_primal_relative",
+        "eps_dual_relative",
         "time_sec_limit",
         "iteration_limit",
         "initial_rank",
@@ -98,7 +99,8 @@ params_from_dict(const py::dict &d) {
         }
         py::object v = py::reinterpret_borrow<py::object>(item.second);
         if      (key == "eps_optimal_relative")   p.eps_optimal_relative   = v.cast<double>();
-        else if (key == "eps_feasible_relative")  p.eps_feasible_relative  = v.cast<double>();
+        else if (key == "eps_primal_relative")    p.eps_primal_relative    = v.cast<double>();
+        else if (key == "eps_dual_relative")      p.eps_dual_relative      = v.cast<double>();
         else if (key == "time_sec_limit")         p.time_sec_limit         = v.cast<double>();
         else if (key == "iteration_limit")        p.iteration_limit        = v.cast<int>();
         else if (key == "initial_rank")           p.initial_rank           = v.cast<int>();
@@ -254,7 +256,8 @@ PYBIND11_MODULE(_core, m) {
               cardal_default_params(&p);
               py::dict d;
               d["eps_optimal_relative"]   = p.eps_optimal_relative;
-              d["eps_feasible_relative"]  = p.eps_feasible_relative;
+              d["eps_primal_relative"]    = p.eps_primal_relative;
+              d["eps_dual_relative"]      = p.eps_dual_relative;
               d["time_sec_limit"]         = p.time_sec_limit;
               d["iteration_limit"]        = p.iteration_limit;
               d["initial_rank"]           = p.initial_rank;

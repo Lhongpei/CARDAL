@@ -33,7 +33,8 @@ int cli_apply_solver_opt(int opt, const char *optarg,
     params->max_rank = atoi(optarg);
     return 1;
   case 'e':
-    params->termination_criteria.eps_feasible_relative = atof(optarg);
+    params->termination_criteria.eps_primal_relative = atof(optarg);
+    params->termination_criteria.eps_dual_relative = atof(optarg);
     params->termination_criteria.eps_optimal_relative = atof(optarg);
     return 1;
   case 'i':
@@ -136,6 +137,15 @@ int cli_apply_solver_opt(int opt, const char *optarg,
       }
     }
     return 1;
+  case CLI_OPT_EPS_PRIMAL:
+    params->termination_criteria.eps_primal_relative = atof(optarg);
+    return 1;
+  case CLI_OPT_EPS_DUAL:
+    params->termination_criteria.eps_dual_relative = atof(optarg);
+    return 1;
+  case CLI_OPT_EPS_GAP:
+    params->termination_criteria.eps_optimal_relative = atof(optarg);
+    return 1;
   }
   return 0;
 }
@@ -146,23 +156,29 @@ void cli_print_solver_param_help(void) {
          "(Default: Auto 2*log(m))\n");
   printf("  -R, --max-rank <int>    Hard upper bound on per-block rank "
          "(Default: Auto ceil((sqrt(8m+1)-1)/2))\n");
-  printf("  -e, --eps <float>       Target tolerance (Feas & Opt) "
+  printf("  -e, --eps <float>       Set primal, dual, and gap tolerances "
+         "(Default: 1e-4)\n");
+  printf("      --eps-primal <flt>  Relative primal residual tolerance "
+         "(Default: 1e-4)\n");
+  printf("      --eps-dual <flt>    Relative dual residual tolerance "
+         "(Default: 1e-4)\n");
+  printf("      --eps-gap <flt>     Relative objective-gap tolerance "
          "(Default: 1e-4)\n");
   printf("  -i, --inner-iters <int> Inner loop iteration limit "
-         "(Default: 1000)\n");
+         "(Default: 30000)\n");
   printf("  -o, --outer-iters <int> Outer loop iteration limit "
-         "(Default: 500)\n");
+         "(Default: 20000000)\n");
   printf("  -p, --penalty-fac <flt> Penalty multiplier factor "
-         "(Default: 1.5)\n");
+         "(Default: 1.2)\n");
   printf("  -M, --max-penalty <flt> Max penalty coefficient "
          "(Default: 5e5)\n");
   printf("  -T, --time-limit <sec>  Wall-time budget in seconds "
-         "(0 = no limit, default)\n");
+         "(0 = no limit, default 3600)\n");
   printf("  -L, --lbfgs-hist <int>  LBFGS history depth m (Default: 5)\n");
   printf("  -c, --init-penalty <flt>Initial penalty coefficient "
          "(Default: Auto 2/sqrt(N))\n");
   printf("  -v, --verbose <int>     Log level: 0=silent, 1=banner+summary, "
-         "2=+sections+iter, 3=debug (default 3)\n");
+         "2=+sections+iter, 3=debug (default 2)\n");
   printf("  -z, --grid_size <r,n[,k]>  Grid topology for MPI: "
          "r=row (constraint) axis, n=rank (BM-col) axis, "
          "k=cone axis (default 1)\n");

@@ -36,8 +36,8 @@ class Result:
         Absolute primal-dual gap.
     rel_primal_residual, rel_dual_residual, rel_objective_gap
         Relative primal / dual residual and duality gap (the three quantities
-        against which ``eps_optimal_relative`` / ``eps_feasible_relative``
-        are compared).
+        compared against ``eps_primal_relative``, ``eps_dual_relative``, and
+        ``eps_optimal_relative``, respectively).
     runtime_sec
         Solver wall-clock, excluding setup and post-solve unscaling.
     outer_iters, inner_iters

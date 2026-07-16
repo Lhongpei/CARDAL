@@ -63,8 +63,9 @@ void cardal_default_params(cardal_params *p) {
     return;
   cardal_parameters_t d;
   set_default_parameters(&d);
+  p->eps_primal_relative    = d.termination_criteria.eps_primal_relative;
+  p->eps_dual_relative      = d.termination_criteria.eps_dual_relative;
   p->eps_optimal_relative   = d.termination_criteria.eps_optimal_relative;
-  p->eps_feasible_relative  = d.termination_criteria.eps_feasible_relative;
   p->time_sec_limit         = d.termination_criteria.time_sec_limit;
   p->iteration_limit        = d.termination_criteria.iteration_limit;
   p->initial_rank           = d.initial_rank;
@@ -86,7 +87,8 @@ static void cardal_params_to_internal(const cardal_params *src,
   if (src == NULL)
     return;
   dst->termination_criteria.eps_optimal_relative  = src->eps_optimal_relative;
-  dst->termination_criteria.eps_feasible_relative = src->eps_feasible_relative;
+  dst->termination_criteria.eps_primal_relative   = src->eps_primal_relative;
+  dst->termination_criteria.eps_dual_relative     = src->eps_dual_relative;
   dst->termination_criteria.time_sec_limit        = src->time_sec_limit;
   dst->termination_criteria.iteration_limit       = src->iteration_limit;
   dst->initial_rank           = src->initial_rank;

@@ -45,7 +45,8 @@ def test_set_problem_dense_smallest_eig():
     result = m.solve(
         time_sec_limit=30.0,
         eps_optimal_relative=1e-6,
-        eps_feasible_relative=1e-6,
+        eps_primal_relative=1e-6,
+        eps_dual_relative=1e-6,
         verbose=0,
     )
     assert result.status is cardal.OPTIMAL, f"got {result.status}"
@@ -67,7 +68,8 @@ def test_set_problem_sparse_smallest_eig():
     result = m.solve(
         time_sec_limit=30.0,
         eps_optimal_relative=1e-6,
-        eps_feasible_relative=1e-6,
+        eps_primal_relative=1e-6,
+        eps_dual_relative=1e-6,
         verbose=0,
     )
     assert result.status is cardal.OPTIMAL, f"got {result.status}"
@@ -100,7 +102,8 @@ def test_set_problem_coo_smallest_eig():
     result = m.solve(
         time_sec_limit=30.0,
         eps_optimal_relative=1e-6,
-        eps_feasible_relative=1e-6,
+        eps_primal_relative=1e-6,
+        eps_dual_relative=1e-6,
         verbose=0,
     )
     assert result.status is cardal.OPTIMAL, f"got {result.status}"
@@ -126,14 +129,16 @@ def test_set_problem_solve_and_reuse():
     m = Model()
     m.set_problem(block_dims=[2], C=[H1], A=[[np.eye(2)]], b=[1.0])
     r1 = m.solve(time_sec_limit=15.0, eps_optimal_relative=1e-6,
-                 eps_feasible_relative=1e-6, verbose=0)
+                 eps_primal_relative=1e-6, eps_dual_relative=1e-6,
+                 verbose=0)
     assert r1.status is cardal.OPTIMAL
     assert abs(r1.primal_objective - 2.0) < 1e-3
 
     # Swap in a different problem.
     m.set_problem(block_dims=[2], C=[H2], A=[[np.eye(2)]], b=[1.0])
     r2 = m.solve(time_sec_limit=15.0, eps_optimal_relative=1e-6,
-                 eps_feasible_relative=1e-6, verbose=0)
+                 eps_primal_relative=1e-6, eps_dual_relative=1e-6,
+                 verbose=0)
     assert r2.status is cardal.OPTIMAL
     assert abs(r2.primal_objective - 4.0) < 1e-3
     # Original result is untouched (frozen dataclass).

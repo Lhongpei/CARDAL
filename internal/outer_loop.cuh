@@ -46,9 +46,9 @@ check_termination(const cardal_sdp_solver_state_t *state,
     return TERMINATION_REASON_USER_INTERRUPT;
   }
   if (state->relative_primal_residual <
-          params->termination_criteria.eps_feasible_relative &&
+          params->termination_criteria.eps_primal_relative &&
       state->relative_dual_residual <
-          params->termination_criteria.eps_feasible_relative &&
+          params->termination_criteria.eps_dual_relative &&
       state->relative_objective_gap <
           params->termination_criteria.eps_optimal_relative) {
     return TERMINATION_REASON_OPTIMAL;
@@ -178,7 +178,7 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
           state->inner_eta * rel_primal_for_tol * scale_factor;
       double tol = (rho_tol > primal_tol) ? rho_tol : primal_tol;
       double tol_floor =
-          0.5 * params->termination_criteria.eps_feasible_relative *
+          0.5 * params->termination_criteria.eps_primal_relative *
           scale_factor;
       double tol_cap = 0.5 * scale_factor;
       double min_hardware_tol = 1e-7 * scale_factor;
@@ -299,7 +299,7 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
                                  : 0.0;
     int eta_gate_passed = (rel_q0_for_gate <= state->lancelot_eta);
     double eta_floor =
-        0.5 * params->termination_criteria.eps_feasible_relative;
+        0.5 * params->termination_criteria.eps_primal_relative;
 
     const int lancelot_disabled = 0;
     const double monotone_rho_factor = 0.0;  // 0 = disabled
@@ -447,7 +447,7 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
 
     if (!state->dual_residual_evaluated &&
         state->relative_primal_residual <
-            params->termination_criteria.eps_feasible_relative &&
+            params->termination_criteria.eps_primal_relative &&
         state->relative_objective_gap <
             params->termination_criteria.eps_optimal_relative) {
       update_dual_slack_S(state);

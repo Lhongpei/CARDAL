@@ -8,7 +8,8 @@ Typical usage::
     import cardal
     m = cardal.Model()
     m.read_file("problem.dat-s")
-    result = m.solve(time_sec_limit=60.0, eps_optimal_relative=1e-4)
+    result = m.solve(time_sec_limit=60.0, eps_primal_relative=1e-4,
+                     eps_dual_relative=1e-4, eps_optimal_relative=1e-4)
     print(result.summary())
 """
 
@@ -340,7 +341,7 @@ class Model:
         Any keyword argument is passed straight through to the solver as a
         parameter override; unknown keys raise ``TypeError`` (contra
         Gurobi-style silent-accept). See :meth:`default_params` for the
-        full list of recognized keys and their defaults.
+        supported parameter keys and their defaults.
 
         A running solve can be interrupted with Ctrl-C; the SIGINT handler
         installed by the C binding flips a cooperative cancel flag, the

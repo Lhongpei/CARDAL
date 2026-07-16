@@ -27,6 +27,9 @@ enum {
   CLI_OPT_NO_SCALING,
   CLI_OPT_PSD_SCALE_MODE,
   CLI_OPT_SHUFFLE_MODE,
+  CLI_OPT_EPS_PRIMAL,
+  CLI_OPT_EPS_DUAL,
+  CLI_OPT_EPS_GAP,
 };
 
 char *cli_extract_instance_name(const char *filename);

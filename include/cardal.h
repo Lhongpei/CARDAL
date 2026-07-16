@@ -42,10 +42,11 @@ typedef struct cardal_result  cardal_result;
  * ----------------------------------------------------------------------- */
 
 typedef struct {
-  /* Termination tolerances. Uniformly used as relative residual / gap
-     thresholds; the solver stops when primal, dual, and gap all clear. */
-  double eps_optimal_relative;      /* default 1e-4 */
-  double eps_feasible_relative;     /* default 1e-4 */
+  /* Independent relative termination tolerances. The solver stops when the
+     primal residual, dual residual, and objective gap all clear. */
+  double eps_primal_relative;       /* default 1e-4 */
+  double eps_dual_relative;         /* default 1e-4 */
+  double eps_optimal_relative;      /* objective-gap tolerance; default 1e-4 */
   double time_sec_limit;            /* default 3600.0; 0.0 disables */
   int    iteration_limit;           /* default 20000000 (outer ALM cap) */
 

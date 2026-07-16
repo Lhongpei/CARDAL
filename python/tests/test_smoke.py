@@ -33,7 +33,8 @@ def test_solve_fe4s4():
     result = m.solve(
         time_sec_limit=5.0,
         eps_optimal_relative=1e-2,
-        eps_feasible_relative=1e-2,
+        eps_primal_relative=1e-2,
+        eps_dual_relative=1e-2,
         verbose=0,
     )
     assert isinstance(result, cardal.Result)
@@ -52,9 +53,12 @@ def test_solve_fe4s4():
 
 def test_default_params_shape():
     p = Model.default_params()
-    for key in ("eps_optimal_relative", "eps_feasible_relative",
+    for key in ("eps_optimal_relative", "eps_primal_relative",
+                "eps_dual_relative",
                 "time_sec_limit", "iteration_limit", "verbose"):
         assert key in p
+    assert p["eps_primal_relative"] == 1e-4
+    assert p["eps_dual_relative"] == 1e-4
 
 
 def test_solve_before_read_file_raises():

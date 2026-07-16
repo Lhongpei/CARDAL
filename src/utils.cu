@@ -126,8 +126,12 @@ void print_parameters_section(const cardal_parameters_t *params,
   if (!LOG_V(verbose_floor) || params == NULL)
     return;
   print_subtitle("Parameters");
-  print_kv_dbl("Tol (feas/opt)", "%.1e",
-               params->termination_criteria.eps_feasible_relative);
+  print_kv_dbl("Tol (primal)", "%.1e",
+               params->termination_criteria.eps_primal_relative);
+  print_kv_dbl("Tol (dual)", "%.1e",
+               params->termination_criteria.eps_dual_relative);
+  print_kv_dbl("Tol (gap)", "%.1e",
+               params->termination_criteria.eps_optimal_relative);
   print_kv_int("Outer iter cap",
                params->termination_criteria.iteration_limit);
   print_kv_int("Inner iter cap", (long long)params->inner_iterations_limit);
@@ -710,7 +714,8 @@ compute_initial_penalty_coef(const compressed_sdp_problem_t *sdp_problem) {
 }
 
 void set_default_parameters(cardal_parameters_t *params) {
-  params->termination_criteria.eps_feasible_relative = 1e-4;
+  params->termination_criteria.eps_primal_relative = 1e-4;
+  params->termination_criteria.eps_dual_relative = 1e-4;
   params->termination_criteria.eps_optimal_relative = 1e-4;
   params->termination_criteria.time_sec_limit = 3600.0;
   params->initial_rank = -1;
@@ -833,4 +838,3 @@ void print_log_entry(const cardal_sdp_solver_state_t *state,
          state->relative_objective_gap, state->total_rank, state->penalty_coef,
          iter_per_sec);
 }
-

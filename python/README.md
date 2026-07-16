@@ -60,7 +60,8 @@ m.read_file("problem.dat-s")                       # or .dat-s.gz / .mat / .npz
 result = m.solve(
     time_sec_limit=60.0,
     eps_optimal_relative=1e-4,
-    eps_feasible_relative=1e-4,
+    eps_primal_relative=1e-4,
+    eps_dual_relative=1e-4,
     verbose=1,
 )
 
@@ -196,16 +197,17 @@ Read-only properties (each raises `RuntimeError` before a problem is loaded):
 | `m.lp_dim`           | Size of the nonnegative LP tail (`0` for pure SDP).                |
 | `m.block_dims`       | Per-cone side lengths $[n_1,\dots,n_p]$, as a fresh list.          |
 
-`repr(m)` yields `"<cardal.Model (empty)>"` before load and `"<cardal.Model num_cones=... num_constraints=... block_dims=...>"` afterwards. **No silent typos.** Unlike Gurobi, `solve()` does not accept unknown keyword arguments; any typo raises `TypeError("unknown parameter '<name>'")`. Cross-check against `cardal.Model.default_params().keys()`.
+`repr(m)` yields `"<cardal.Model (empty)>"` before load and `"<cardal.Model num_cones=... num_constraints=... block_dims=...>"` afterwards. **No silent typos.** Unlike Gurobi, `solve()` does not accept unknown keyword arguments; any typo raises `TypeError("unknown parameter '<name>'")`. Cross-check current parameters against `cardal.Model.default_params().keys()`.
 
 ## Parameters
 
-Every parameter is passed as a keyword argument to `Model.solve`. `Model.default_params()` is the **canonical source** of every recognized key and its default value &mdash; the table below documents the commonly tuned subset. These defaults come from `set_default_parameters()` in `src/utils.cu` and are shared between the CLI and the Python API.
+Every parameter is passed as a keyword argument to `Model.solve`. `Model.default_params()` is the **canonical source** of parameter keys and default values. The table below documents the commonly tuned subset. These defaults come from `set_default_parameters()` in `src/utils.cu` and are shared between the CLI and the Python API.
 
 | Parameter                    | Type   | Default        | Description                                                                     |
 |:-----------------------------|:-------|:---------------|:--------------------------------------------------------------------------------|
 | `eps_optimal_relative`       | float  | `1e-4`         | Relative objective-gap tolerance.                                               |
-| `eps_feasible_relative`      | float  | `1e-4`         | Relative primal/dual residual tolerance.                                        |
+| `eps_primal_relative`        | float  | `1e-4`         | Relative primal residual tolerance.                                             |
+| `eps_dual_relative`          | float  | `1e-4`         | Relative dual residual tolerance.                                               |
 | `time_sec_limit`             | float  | `3600.0`       | Wall-clock budget in seconds (`0.0` disables).                                  |
 | `iteration_limit`            | int    | `20000000`     | Total outer ALM iteration cap.                                                  |
 | `initial_rank`               | int    | `-1`           | Starting per-cone BM rank; `-1` uses $\lceil 2 \log m \rceil$.                  |

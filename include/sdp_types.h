@@ -110,7 +110,8 @@ typedef struct {
 
 typedef struct {
   double eps_optimal_relative;
-  double eps_feasible_relative;
+  double eps_primal_relative;
+  double eps_dual_relative;
   double time_sec_limit;
   int iteration_limit;
 } termination_criteria_t;

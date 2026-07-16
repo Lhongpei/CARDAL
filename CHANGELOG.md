@@ -7,6 +7,8 @@ versioning once public releases begin.
 
 ## [Unreleased]
 
+- Replaced the shared feasibility tolerance with independent primal and dual
+  residual tolerances across the CLI, C API, and Python API.
 - Prepared repository metadata, CI, and community documents for public release.
 - Added Apache-2.0 source headers across tracked source files.
 
