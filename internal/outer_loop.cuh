@@ -103,8 +103,8 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
   const double dual_step_acceleration = 1.618;
   const double dual_step_acceleration_threshold = 1e-5;
   const double rho_jump_suppression_threshold = 1e-6;
-  const int sentinel_throttle_iters = 1;
-  const int sentinel_gap_stall_iters = 3;
+  const int curvature_check_throttle_iters = 1;
+  const int curvature_check_gap_stall_iters = 3;
   // After this many consecutive gate-pass outer iters with no progress,
   // force a rho jump and trigger augmentation.
   const int gate_pass_force_iters = 10;
@@ -187,12 +187,12 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
       if (tol > tol_cap)
         tol = tol_cap;
 
-      const double sentinel_trust_c = 1e-4;
-      const int sentinel_max_escapes = 3;
-      int sentinel_disabled = 0;
+      const double negative_curvature_threshold_factor = 1e-4;
+      const int max_curvature_escape_steps = 3;
+      int curvature_detection_disabled = 0;
 #ifdef IS_DISTRIBUTED
       if (state->grid_context != NULL && state->grid_context->dims[2] > 1)
-        sentinel_disabled = 1;
+        curvature_detection_disabled = 1;
 #endif
       int inner_iters = ALM_INNER_SOLVER(state, tol);
       state->num_inner_iteration += inner_iters;
@@ -201,34 +201,35 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
       int stationary = (state->lbfgs_exit_reason == LBFGS_GRAD_CONVERGED) ||
                        (state->lbfgs_exit_reason == LBFGS_TAU_STALL);
       int gap_stalled =
-          (state->gap_stall_count >= sentinel_gap_stall_iters);
-      int iters_since_fire =
-          (state->sentinel_last_fire_iter < 0)
+          (state->gap_stall_count >= curvature_check_gap_stall_iters);
+      int iters_since_curvature_check =
+          (state->curvature_last_check_iter < 0)
               ? INT_MAX
               : (state->num_outer_iteration -
-                 state->sentinel_last_fire_iter);
-      int throttle_ok = (iters_since_fire >= sentinel_throttle_iters);
-      int sentinel_should_fire = stationary && gap_stalled && throttle_ok;
+                 state->curvature_last_check_iter);
+      int throttle_ok =
+          (iters_since_curvature_check >= curvature_check_throttle_iters);
+      int should_detect_curvature = stationary && gap_stalled && throttle_ok;
 #ifdef IS_DISTRIBUTED
-      if (!sentinel_disabled && state->grid_context != NULL) {
-        int local_fire = sentinel_should_fire ? 1 : 0;
-        int global_fire = 0;
-        MPI_Allreduce(&local_fire, &global_fire, 1, MPI_INT, MPI_MAX,
+      if (!curvature_detection_disabled && state->grid_context != NULL) {
+        int local_detect = should_detect_curvature ? 1 : 0;
+        int global_detect = 0;
+        MPI_Allreduce(&local_detect, &global_detect, 1, MPI_INT, MPI_MAX,
                       state->grid_context->comm_global);
-        sentinel_should_fire = global_fire;
+        should_detect_curvature = global_detect;
       }
 #endif
-      if (!sentinel_disabled && sentinel_should_fire) {
-        state->sentinel_last_fire_iter = state->num_outer_iteration;
-        state->sentinel_last_fire_rank = state->total_rank;
+      if (!curvature_detection_disabled && should_detect_curvature) {
+        state->curvature_last_check_iter = state->num_outer_iteration;
         state->gap_stall_count = 0;
         {
           const double post_esc_tol_factor = 0.01;
           double post_esc_tol = tol * post_esc_tol_factor;
           if (post_esc_tol < min_hardware_tol) post_esc_tol = min_hardware_tol;
 
-          for (int esc = 0; esc < sentinel_max_escapes; esc++) {
-            int n_esc = SECOND_ORDER_SENTINEL(state, sentinel_trust_c);
+          for (int esc = 0; esc < max_curvature_escape_steps; esc++) {
+            int n_esc = DETECT_NEGATIVE_CURVATURE_AND_ESCAPE(
+                state, negative_curvature_threshold_factor);
             int global_n_esc = n_esc;
 #ifdef IS_DISTRIBUTED
             if (state->grid_context != NULL) {
@@ -392,7 +393,7 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
     // BM-rank-deficiency safety: LANCELOT block set this when too many
     // consecutive gate-pass iters detected no real progress. Force augment
     // bypassing the cooldown (we explicitly want both rho jump and rank
-    // augment to fire in lockstep).
+    // augmentation to trigger in lockstep).
     if (state->force_augment_this_iter) {
       should_augment = 1;
       state->force_augment_this_iter = 0;

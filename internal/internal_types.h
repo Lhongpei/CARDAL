@@ -300,8 +300,7 @@ typedef struct {
   int *batch_leaders;
 
   int gate_fail_streak;
-  int sentinel_last_fire_iter;
-  int sentinel_last_fire_rank;
+  int curvature_last_check_iter;
 
   int gap_stall_count;
   int consecutive_gate_pass;

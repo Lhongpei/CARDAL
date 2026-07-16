@@ -141,8 +141,7 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
   state->prev_outer_primal_for_eta = 0.0;
   state->lancelot_eta = 1.0;
   state->gate_fail_streak = 0;
-  state->sentinel_last_fire_iter = -10000;
-  state->sentinel_last_fire_rank = -1;
+  state->curvature_last_check_iter = -10000;
   state->gap_stall_count = 0;
   state->consecutive_gate_pass = 0;
   state->force_augment_this_iter = 0;

@@ -35,7 +35,7 @@ typedef struct cardal_result  cardal_result;
 /* -----------------------------------------------------------------------
  * Parameters (POD, ABI-stable). All doubles / ints; no pointers.
  *
- * Sentinel values:
+ * Special values:
  *   double  -1.0  => auto / disabled (per field docstring)
  *   int     -1    => auto / disabled (per field docstring)
  *   time_sec_limit == 0.0  => no time limit

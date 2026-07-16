@@ -19,8 +19,8 @@
 #include <time.h>
 
 // Helper: Allreduce-SUM a scalar across the Rank axis (comm_rank). Used by
-// the sentinel Lanczos so per-rank dot products / squared norms sum to a
-// globally-consistent value when the BM-column dimension is split.
+// negative-curvature detection so per-rank dot products / squared norms sum
+// to a globally-consistent value when the BM-column dimension is split.
 static inline double rank_axis_sum_scalar(cardal_sdp_solver_state_t *state,
                                           double local) {
 #ifdef IS_DISTRIBUTED
@@ -547,8 +547,8 @@ COMPUTE_BM_HVP_PERCONE(cardal_sdp_solver_state_t *state,
 #ifndef LANCZOS_K
 #define LANCZOS_K 30
 #endif
-#ifndef SENTINEL_LANCZOS_K
-#define SENTINEL_LANCZOS_K 15
+#ifndef NEGATIVE_CURVATURE_LANCZOS_K
+#define NEGATIVE_CURVATURE_LANCZOS_K 15
 #endif
 static inline int
 FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
@@ -563,7 +563,9 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
   if (r <= 0 || dim <= 0) return 0;
 
   size_t N = (size_t)dim * (size_t)r;
-  int k_target = (N < (size_t)SENTINEL_LANCZOS_K) ? (int)N : SENTINEL_LANCZOS_K;
+  int k_target = (N < (size_t)NEGATIVE_CURVATURE_LANCZOS_K)
+                     ? (int)N
+                     : NEGATIVE_CURVATURE_LANCZOS_K;
   int k = k_target;
 
   int nnz_Union =
@@ -1541,10 +1543,11 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
 // sign-aligns V_neg against gradient, applies R += tau*V_neg. Returns
 // number of blocks that escaped. Caller must re-run LBFGS after.
 static inline int
-SECOND_ORDER_SENTINEL(cardal_sdp_solver_state_t *state, double trust_c) {
+DETECT_NEGATIVE_CURVATURE_AND_ESCAPE(cardal_sdp_solver_state_t *state,
+                                     double threshold_factor) {
   if (state->n_blks <= 0) return 0;
   double scale_factor = 1.0 + state->objective_vector_linf_norm;
-  double trust_thresh = trust_c * scale_factor;
+  double curvature_threshold = threshold_factor * scale_factor;
 
   int escaped = 0;
 
@@ -1567,7 +1570,7 @@ SECOND_ORDER_SENTINEL(cardal_sdp_solver_state_t *state, double trust_c) {
     double *d_V_neg = NULL;
     FIND_AL_NEGATIVE_CURVATURE(state, b, &lambda_min, &d_V_neg);
 
-    if (d_V_neg == NULL || lambda_min >= -trust_thresh) {
+    if (d_V_neg == NULL || lambda_min >= -curvature_threshold) {
       if (d_V_neg) CUDA_CHECK(cudaFree(d_V_neg));
       blk_offset += blk_len;
       continue;
