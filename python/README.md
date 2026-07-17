@@ -172,7 +172,7 @@ The COO path uses the same lower-triangle-only convention; LP-block triplets go 
 CARDAL supports two cone kinds, both provided implicitly through `block_dims` and `lp_dim` rather than a separate cone-descriptor argument:
 
 - **PSD cones.** Each entry of `block_dims` is the side length $n_c$ of a symmetric block $X_c \succeq 0$. Stored as Burer-Monteiro factors $V_c \in \mathbb{R}^{n_c \times r_c}$.
-- **Nonnegative LP tail.** A single nonnegative block $x_{\text{LP}} \in \mathbb{R}^{\text{lp\_dim}}$ appended after the PSD blocks. Set `lp_dim=0` (default) for pure SDPs.
+- **Nonnegative LP tail.** A single nonnegative block $x_{\mathrm{LP}} \in \mathbb{R}^{d_{\mathrm{LP}}}$ is appended after the PSD blocks, where $d_{\mathrm{LP}}$ is specified by `lp_dim`. Set `lp_dim=0` (default) for pure SDPs.
 
 Second-order cones, exponential cones, and generic bounded cones are **not** supported. Nonnegative LP variables are the only non-PSD cone.
 
