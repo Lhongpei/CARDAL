@@ -23,7 +23,7 @@ authors = [
 maintainers = [
     { name = "Hongpei Li", email = "ishongpeili@gmail.com" },
 ]
-keywords = ["semidefinite programming", "low-rank", "GPU", "CUDA", "MPI"]
+keywords = ["semidefinite programming", "GPU Solver"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -62,6 +62,7 @@ CARDAL_BUILD_PYTHON = "ON"
 CARDAL_BUILD_CLI    = "OFF"
 CARDAL_BUILD_QUBO   = "OFF"
 ENABLE_MPI          = "OFF"      # single-GPU only in v0
+ENABLE_MATIO        = "OFF"      # Python API accepts in-memory arrays
 CMAKE_CUDA_STANDARD = "17"
 
 [tool.pytest.ini_options]
