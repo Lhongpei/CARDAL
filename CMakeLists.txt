@@ -7,7 +7,7 @@ option(CARDAL_BUILD_PYTHON   "Build the CARDAL pybind11 module"       OFF)
 option(CARDAL_BUILD_CLI      "Build the cardal CLI"                    ON)
 option(CARDAL_BUILD_QUBO     "Build the QUBO auxiliary library + CLI" ON)
 
-project(cardal LANGUAGES C CXX CUDA)
+project(cardal VERSION 0.0.1 LANGUAGES C CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -115,6 +115,10 @@ endif()
 
 add_library(sdp_core STATIC ${SRC_FILES})
 
+target_compile_definitions(sdp_core PRIVATE
+    CARDAL_VERSION="${PROJECT_VERSION}"
+)
+
 target_link_libraries(sdp_core 
     PRIVATE ${CUDA_LIBS} 
     PUBLIC ${CORE_LINK_LIBS}
@@ -174,6 +178,9 @@ endif()
 
 if(CARDAL_BUILD_CLI AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/cli.c")
     add_executable(cardal src/cli.c)
+    target_compile_definitions(cardal PRIVATE
+        CARDAL_VERSION="${PROJECT_VERSION}"
+    )
     target_link_libraries(cardal PRIVATE sdp_core)
 endif()
 

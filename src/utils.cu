@@ -25,16 +25,14 @@ int g_log_verbose = 3;
 #define CARDAL_LOG_RULE                                                         \
   "----------------------------------------------------------------------------" \
   "--------------------"
-#define CARDAL_VERSION "0.0.1"
 
 void print_cardal_banner(void) {
   if (!LOG_V(1))
     return;
   printf("%s\n", CARDAL_RULE);
   printf("                                 CARDAL v%s\n", CARDAL_VERSION);
-  printf("          A Burer-Monteiro Augmented Lagrangian Method for "
-         "Large-Scale\n");
-  printf("                          SDPs on Multi-GPU Systems\n");
+  printf("     A Low-Rank ALM Solver for Large-Scale SDPs with Multi-GPU "
+         "Acceleration\n");
   printf("\n");
   printf("                     Hongpei Li (ishongpeili@gmail.com)\n");
   printf("%s\n", CARDAL_RULE);

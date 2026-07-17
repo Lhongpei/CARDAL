@@ -531,18 +531,25 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
     ruiz_rescaling_sdp(info->scaled_problem, params->l_inf_ruiz_iterations,
                        info, params->psd_scale_mode);
 
-  // Snapshot RUIZ-only scaling for diagnostics.
-  double *ruiz_only_constraint = (double *)safe_malloc((size_t)m * sizeof(double));
-  double *ruiz_only_psd = total_r_dim > 0
-      ? (double *)safe_malloc((size_t)total_r_dim * sizeof(double)) : NULL;
-  for (int i = 0; i < m; i++)
-    ruiz_only_constraint[i] = info->constraint_rescaling[i];
-  for (int i = 0; i < total_r_dim; i++)
-    ruiz_only_psd[i] = info->psd_cone_rescaling[i];
+  double *ruiz_only_constraint = NULL;
+  double *ruiz_only_psd = NULL;
+  if (params->verbose >= 3) {
+    // Snapshot Ruiz-only scaling for debug diagnostics.
+    ruiz_only_constraint =
+        (double *)safe_malloc((size_t)m * sizeof(double));
+    ruiz_only_psd =
+        total_r_dim > 0
+            ? (double *)safe_malloc((size_t)total_r_dim * sizeof(double))
+            : NULL;
+    for (int i = 0; i < m; i++)
+      ruiz_only_constraint[i] = info->constraint_rescaling[i];
+    for (int i = 0; i < total_r_dim; i++)
+      ruiz_only_psd[i] = info->psd_cone_rescaling[i];
+  }
 
   // Optionally compute "PC-before-Ruiz" stats by running PC on a deep copy of
   // the original problem (does not affect the actual scaling pipeline).
-  if (params->has_pock_chambolle_alpha && params->verbose >= 2) {
+  if (params->has_pock_chambolle_alpha && params->verbose >= 3) {
     rescale_info_t *probe = (rescale_info_t *)safe_calloc(1, sizeof(rescale_info_t));
     probe->scaled_problem = deepcopy_sdp_problem(original_problem);
     probe->constraint_rescaling = (double *)safe_calloc((size_t)m, sizeof(double));
@@ -574,7 +581,7 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
   }
 
   // Print Ruiz-only stats.
-  if (params->verbose >= 2 && params->l_inf_ruiz_iterations > 0) {
+  if (params->verbose >= 3 && params->l_inf_ruiz_iterations > 0) {
     double rmin = 1e300, rmax = 0.0;
     for (int i = 0; i < m; i++) {
       double v = ruiz_only_constraint[i];
@@ -596,7 +603,7 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
                                  params->pock_chambolle_alpha, info,
                                  params->psd_scale_mode);
     // Diagnostic: report the diagonal scaling factor statistics after PC.
-    if (params->verbose >= 2) {
+    if (params->verbose >= 3) {
       double rmin = 1e300, rmax = 0.0, rsum = 0.0;
       for (int i = 0; i < m; i++) {
         double v = info->constraint_rescaling[i];

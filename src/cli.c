@@ -174,10 +174,9 @@ void print_usage(const char *prog_name) {
       "==============================================================="
       "=================";
   printf("%s\n", rule80);
-  printf("                                 CARDAL\n");
-  printf("          A Burer-Monteiro Augmented Lagrangian Method for "
-         "Large-Scale\n");
-  printf("                         SDPs on Multi-GPU Systems\n");
+  printf("                              CARDAL v%s\n", CARDAL_VERSION);
+  printf("     A Low-Rank ALM Solver for Large-Scale SDPs with Multi-GPU "
+         "Acceleration\n");
   printf("\n");
   printf("                     Hongpei Li (ishongpeili@gmail.com)\n");
   printf("%s\n", rule80);
