@@ -47,6 +47,12 @@ double compute_penalty_perturbation_fnorm(cardal_sdp_solver_state_t *state);
 // PERCONE only, single-GPU.
 double compute_Asuu_norm_sq_percone(cardal_sdp_solver_state_t *state,
                                     block_low_rank_state_t *blk, double *d_u);
+void compute_rank_lift_A_ww(cardal_sdp_solver_state_t *state,
+                            block_low_rank_state_t *blk, double *d_w,
+                            double *d_out_m);
+void compute_rank_lift_A_uv(cardal_sdp_solver_state_t *state,
+                            block_low_rank_state_t *blk, double *d_u,
+                            double *d_v, double *d_out_m);
 // PERCONE only. q0_norm_budget <= 0 disables trust cap. Returns realized ||Cs||.
 double solve_alora_sdp_percone(cardal_sdp_solver_state_t *state,
                                block_low_rank_state_t *blk, const double *d_V,

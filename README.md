@@ -111,6 +111,7 @@ print(result.status, result.primal_objective, result.rel_objective_gap)
 | `--eps-gap` | float | Relative objective-gap tolerance. | `1e-4` |
 | `-r, --rank` | int | Initial Burer-Monteiro rank. | `ceil(2 log m)` |
 | `-R, --max-rank` | int | Maximum rank of each PSD block. | Pataki bound |
+| `--augmentation-mode` | string | Rank augmentation backend: `random`, `qp`, `closed-form`, or `sdp`. | `random` |
 | `-i, --inner-iters` | int | L-BFGS iteration limit per outer step. | `30000` |
 | `-o, --outer-iters` | int | Augmented-Lagrangian outer iteration limit. | `20000000` |
 | `-p, --penalty-fac` | float | Penalty coefficient multiplier. | `1.2` |

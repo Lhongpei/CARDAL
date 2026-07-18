@@ -88,9 +88,11 @@ static void as_ww_to_vec(cardal_sdp_solver_state_t *state,
                          block_low_rank_state_t *blk, double *d_w,
                          double *d_out_m) {
   int dim = blk->dim;
-  int nnz_A = blk->constraint_sparse_pattern->num_nonzeros;
   CUDA_CHECK(cudaMemsetAsync(d_out_m, 0,
                              state->num_constraints * sizeof(double), 0));
+  if (blk->constraint_sparse_pattern == NULL)
+    return;
+  int nnz_A = blk->constraint_sparse_pattern->num_nonzeros;
   if (nnz_A == 0)
     return;
 
@@ -132,6 +134,79 @@ static void as_ww_to_vec(cardal_sdp_solver_state_t *state,
   if (buf != NULL)
     CUDA_CHECK(cudaFree(buf));
   CUSPARSE_CHECK(cusparseDestroyDnMat(matW));
+}
+
+void compute_rank_lift_A_ww(cardal_sdp_solver_state_t *state,
+                            block_low_rank_state_t *blk, double *d_w,
+                            double *d_out_m) {
+  as_ww_to_vec(state, blk, d_w, d_out_m);
+}
+
+void compute_rank_lift_A_uv(cardal_sdp_solver_state_t *state,
+                            block_low_rank_state_t *blk, double *d_u,
+                            double *d_v, double *d_out_m) {
+  CUDA_CHECK(cudaMemsetAsync(d_out_m, 0,
+                             state->num_constraints * sizeof(double), 0));
+  if (blk->constraint_sparse_pattern == NULL)
+    return;
+  int nnz_A = blk->constraint_sparse_pattern->num_nonzeros;
+  if (nnz_A == 0)
+    return;
+
+  int dim = blk->dim;
+  cusparseDnMatDescr_t matU, matV;
+  CUSPARSE_CHECK(cusparseCreateDnMat(&matU, dim, 1, dim, d_u, CUDA_R_64F,
+                                     CUSPARSE_ORDER_COL));
+  CUSPARSE_CHECK(cusparseCreateDnMat(&matV, dim, 1, dim, d_v, CUDA_R_64F,
+                                     CUSPARSE_ORDER_COL));
+
+  double alpha = 1.0, beta = 0.0, accumulate = 1.0;
+  size_t buffer_size_u = 0, buffer_size_v = 0;
+  CUSPARSE_CHECK(cusparseSDDMM_bufferSize(
+      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+      CUSPARSE_OPERATION_TRANSPOSE, &alpha, matU, matV, &beta, blk->matSpA,
+      CUDA_R_64F, CUSPARSE_SDDMM_ALG_DEFAULT, &buffer_size_u));
+  CUSPARSE_CHECK(cusparseSDDMM_bufferSize(
+      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+      CUSPARSE_OPERATION_TRANSPOSE, &alpha, matV, matU, &accumulate,
+      blk->matSpA, CUDA_R_64F, CUSPARSE_SDDMM_ALG_DEFAULT, &buffer_size_v));
+  size_t buffer_size =
+      buffer_size_u > buffer_size_v ? buffer_size_u : buffer_size_v;
+  void *buffer = NULL;
+  if (buffer_size > 0)
+    CUDA_CHECK(cudaMalloc(&buffer, buffer_size));
+
+  CUSPARSE_CHECK(cusparseSDDMM(
+      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+      CUSPARSE_OPERATION_TRANSPOSE, &alpha, matU, matV, &beta, blk->matSpA,
+      CUDA_R_64F, CUSPARSE_SDDMM_ALG_DEFAULT, buffer));
+  CUSPARSE_CHECK(cusparseSDDMM(
+      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+      CUSPARSE_OPERATION_TRANSPOSE, &alpha, matV, matU, &accumulate,
+      blk->matSpA, CUDA_R_64F, CUSPARSE_SDDMM_ALG_DEFAULT, buffer));
+
+  CUDA_CHECK(cudaMemset(state->primal_solution, 0,
+                        state->n_active_vars * sizeof(double)));
+  int blocks = (nnz_A + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+  scatter_sddmm_to_global_kernel<<<blocks, THREADS_PER_BLOCK>>>(
+      blk->constraint_sparse_pattern->val, blk->compat_mapping,
+      state->primal_solution, nnz_A);
+
+  CUSPARSE_CHECK(
+      cusparseDnVecSetValues(state->vec_primal_sol, state->primal_solution));
+  cusparseDnVecDescr_t vec_out;
+  CUSPARSE_CHECK(cusparseCreateDnVec(&vec_out, state->num_constraints, d_out_m,
+                                     CUDA_R_64F));
+  CUSPARSE_CHECK(cusparseSpMV(
+      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
+      state->matA, state->vec_primal_sol, &beta, vec_out, CUDA_R_64F,
+      CUSPARSE_SPMV_CSR_ALG2, state->primal_spmv_buffer));
+
+  CUSPARSE_CHECK(cusparseDestroyDnVec(vec_out));
+  CUSPARSE_CHECK(cusparseDestroyDnMat(matU));
+  CUSPARSE_CHECK(cusparseDestroyDnMat(matV));
+  if (buffer != NULL)
+    CUDA_CHECK(cudaFree(buffer));
 }
 
 double compute_Asuu_norm_sq_percone(cardal_sdp_solver_state_t *state,

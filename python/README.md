@@ -212,6 +212,7 @@ Every parameter is passed as a keyword argument to `Model.solve`. `Model.default
 | `iteration_limit`            | int    | `20000000`     | Total outer ALM iteration cap.                                                  |
 | `initial_rank`               | int    | `-1`           | Starting per-cone BM rank; `-1` uses $\lceil 2 \log m \rceil$.                  |
 | `max_rank`                   | int    | `-1`           | Rank cap per cone; `-1` uses the Pataki bound $\lceil(\sqrt{8m+1}-1)/2\rceil$.  |
+| `augmentation_mode`          | string | `random`       | Rank augmentation backend: `random`, `qp`, `closed-form`, or `sdp`.             |
 | `lbfgs_history_size`         | int    | `5`            | L-BFGS memory length used by the inner solver.                                  |
 | `penalty_factor`             | float  | `1.2`          | Multiplicative ALM penalty update per outer step.                               |
 | `initial_penalty_coef`       | float  | `-1.0`         | Starting ALM penalty $\beta$; `-1.0` uses $2/\sqrt{N}$.                         |

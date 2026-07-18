@@ -147,6 +147,14 @@ void print_parameters_section(const cardal_parameters_t *params,
     print_kv_int("Max rank", params->max_rank);
   else
     print_kv_str("Max rank", "Auto (ceil((sqrt(8m+1)-1)/2))");
+  const char *augmentation_mode = "random";
+  if (params->augmentation_mode == AUGMENTATION_MODE_QP)
+    augmentation_mode = "qp";
+  else if (params->augmentation_mode == AUGMENTATION_MODE_CLOSED_FORM)
+    augmentation_mode = "closed-form";
+  else if (params->augmentation_mode == AUGMENTATION_MODE_SDP)
+    augmentation_mode = "sdp";
+  print_kv_str("Augmentation", augmentation_mode);
   print_kv_str("Initial rho", params->initial_penalty_coef > 0
                                   ? "Fixed"
                                   : "Auto (2/sqrt N)");
@@ -718,6 +726,7 @@ void set_default_parameters(cardal_parameters_t *params) {
   params->termination_criteria.time_sec_limit = 3600.0;
   params->initial_rank = -1;
   params->max_rank = -1;
+  params->augmentation_mode = AUGMENTATION_MODE_RANDOM;
   params->termination_criteria.iteration_limit = 20000000;
   params->inner_iterations_limit = 30000;
   params->initial_penalty_coef = -1.0;

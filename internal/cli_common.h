@@ -30,6 +30,7 @@ enum {
   CLI_OPT_EPS_PRIMAL,
   CLI_OPT_EPS_DUAL,
   CLI_OPT_EPS_GAP,
+  CLI_OPT_AUGMENTATION_MODE,
 };
 
 char *cli_extract_instance_name(const char *filename);

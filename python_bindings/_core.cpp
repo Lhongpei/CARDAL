@@ -80,6 +80,7 @@ params_from_dict(const py::dict &d) {
         "iteration_limit",
         "initial_rank",
         "max_rank",
+        "augmentation_mode",
         "lbfgs_history_size",
         "penalty_factor",
         "initial_penalty_coef",
@@ -105,6 +106,30 @@ params_from_dict(const py::dict &d) {
         else if (key == "iteration_limit")        p.iteration_limit        = v.cast<int>();
         else if (key == "initial_rank")           p.initial_rank           = v.cast<int>();
         else if (key == "max_rank")               p.max_rank               = v.cast<int>();
+        else if (key == "augmentation_mode") {
+            if (py::isinstance<py::str>(v)) {
+                std::string mode = v.cast<std::string>();
+                if (mode == "random")
+                    p.augmentation_mode = CARDAL_AUGMENTATION_RANDOM;
+                else if (mode == "qp")
+                    p.augmentation_mode = CARDAL_AUGMENTATION_QP;
+                else if (mode == "closed-form" || mode == "closed_form")
+                    p.augmentation_mode = CARDAL_AUGMENTATION_CLOSED_FORM;
+                else if (mode == "sdp")
+                    p.augmentation_mode = CARDAL_AUGMENTATION_SDP;
+                else
+                    throw py::value_error(
+                        "augmentation_mode must be 'random', 'qp', "
+                        "'closed-form', or 'sdp'");
+            } else {
+                p.augmentation_mode = v.cast<int>();
+                if (p.augmentation_mode < CARDAL_AUGMENTATION_RANDOM ||
+                    p.augmentation_mode > CARDAL_AUGMENTATION_SDP)
+                    throw py::value_error(
+                        "augmentation_mode integer is outside the valid "
+                        "enum range");
+            }
+        }
         else if (key == "lbfgs_history_size")     p.lbfgs_history_size     = v.cast<int>();
         else if (key == "penalty_factor")         p.penalty_factor         = v.cast<double>();
         else if (key == "initial_penalty_coef")   p.initial_penalty_coef   = v.cast<double>();
@@ -164,7 +189,7 @@ PYBIND11_MODULE(_core, m) {
               "ergonomic API).";
 
     // ----- Version marker: bump on ABI-visible changes ------------------
-    m.attr("__abi_version__") = py::int_(1);
+    m.attr("__abi_version__") = py::int_(2);
 
     // ----- Status enum --------------------------------------------------
     py::enum_<cardal_status>(m, "Status")
@@ -262,6 +287,14 @@ PYBIND11_MODULE(_core, m) {
               d["iteration_limit"]        = p.iteration_limit;
               d["initial_rank"]           = p.initial_rank;
               d["max_rank"]               = p.max_rank;
+              if (p.augmentation_mode == CARDAL_AUGMENTATION_QP)
+                  d["augmentation_mode"] = "qp";
+              else if (p.augmentation_mode == CARDAL_AUGMENTATION_CLOSED_FORM)
+                  d["augmentation_mode"] = "closed-form";
+              else if (p.augmentation_mode == CARDAL_AUGMENTATION_SDP)
+                  d["augmentation_mode"] = "sdp";
+              else
+                  d["augmentation_mode"] = "random";
               d["lbfgs_history_size"]     = p.lbfgs_history_size;
               d["penalty_factor"]         = p.penalty_factor;
               d["initial_penalty_coef"]   = p.initial_penalty_coef;

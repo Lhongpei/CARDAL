@@ -150,6 +150,7 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
                                   ? params->lbfgs_history_size
                                   : 5;
   state->penalty_factor = params->penalty_factor;
+  state->augmentation_mode = params->augmentation_mode;
 
   state->constraint_matrix =
       (sparse_csr_matrix_t *)safe_malloc(sizeof(sparse_csr_matrix_t));
@@ -1093,16 +1094,9 @@ void refresh_cone_batches(cardal_sdp_solver_state_t *state) {
   }
 }
 
-// Max neg-curvature directions in the full ALORA SDP per cone; rest use
-// rho-aware diagonal closed form.
-#ifndef ALORA_SDP_RANK_CAP
-#define ALORA_SDP_RANK_CAP 4
-#endif
-
 void augment_system_rank(cardal_sdp_solver_state_t *state,
                          const int *rank_incs,
-                         double *const *neg_eigvecs,
-                         double *const *neg_eigvals) {
+                         double *const *new_columns) {
   int new_total_len = 0;
 
   int actually_augmented_blocks = 0;
@@ -1170,98 +1164,16 @@ void augment_system_rank(cardal_sdp_solver_state_t *state,
                dim);
       double *new_cols = new_global_R + new_offset + (dim * old_rank);
       int new_elements = dim * actual_inc;
-      double *eigvec = (neg_eigvecs != NULL) ? neg_eigvecs[b] : NULL;
-      double *eigval = (neg_eigvals != NULL) ? neg_eigvals[b] : NULL;
-
-      // gate_fail_streak < K -> noise augment (q0-invariant);
-      // streak >= K -> SDP-coupled eigvec augment.
-      //
-      // Default: always take the noise augment path. The eigvec-direct
-      // branch inserts raw negative-curvature eigenvectors as BM columns
-      // without q0-budget scaling; at high rho this causes a primal-residual
-      // jump after every augment, rho then balloons, and the dual update
-      // y += rho*(Ax-b) amplifies feasibility noise into large dobj drift.
-      const int noise_augment_override = 1;
-      const int sdp_fail_streak_K = 2;
-      const double trust_alpha = 1.0;
-      int use_noise = noise_augment_override ||
-                      (state->gate_fail_streak < sdp_fail_streak_K);
-      if (use_noise) {
-        eigvec = NULL;
-        eigval = NULL;
+      if (new_columns == NULL || new_columns[b] == NULL) {
+        fprintf(stderr,
+                "CARDAL internal error: missing augmentation columns for "
+                "block %d\n",
+                b);
+        exit(EXIT_FAILURE);
       }
-      double q0_norm = 0.0;
-      CUBLAS_CHECK(cublasDnrm2(state->blas_handle, state->num_constraints,
-                               state->q0, 1, &q0_norm));
-      double q0_norm_budget = trust_alpha * q0_norm;
-      int is_batched = (blk->kind == CONE_BATCH_KIND_CUSTOM);
-      int single_gpu = (state->grid_context == NULL) ||
-                       (state->grid_context->dims[0] == 1 &&
-                        state->grid_context->dims[1] == 1 &&
-                        state->grid_context->dims[2] == 1);
-      int r_cap = actual_inc;
-      if (r_cap > ALORA_SDP_RANK_CAP)
-        r_cap = ALORA_SDP_RANK_CAP;
-      int sdp_ok = (eigvec != NULL && eigval != NULL && !is_batched &&
-                    single_gpu);
-      if (sdp_ok) {
-        double rho = state->penalty_coef;
-        double used = solve_alora_sdp_percone(state, blk, eigvec, eigval,
-                                              r_cap, rho, q0_norm_budget,
-                                              new_cols);
-        double remaining_budget = q0_norm_budget;
-        if (used > 0.0) {
-          double sq = sqrt(q0_norm_budget * q0_norm_budget - used * used);
-          remaining_budget = isnan(sq) ? 0.0 : sq;
-        }
-        for (int c = r_cap; c < actual_inc; c++) {
-          double *col = new_cols + (size_t)c * dim;
-          if (blk->psd_cone_rescaling != NULL) {
-            CUBLAS_CHECK(cublasDdgmm(state->blas_handle, CUBLAS_SIDE_LEFT, dim,
-                                     1, eigvec + (size_t)c * dim, dim,
-                                     blk->psd_cone_rescaling, 1, col, dim));
-          } else {
-            CUDA_CHECK(cudaMemcpy(col, eigvec + (size_t)c * dim,
-                                  dim * sizeof(double),
-                                  cudaMemcpyDeviceToDevice));
-          }
-          double q = compute_Asuu_norm_sq_percone(state, blk, col);
-          double lam = fabs(eigval[c]);
-          double s_star = (rho > 0.0 && q > 1e-30) ? lam / (rho * q) : 1e-8;
-          int n_diag_remaining = actual_inc - c;
-          if (q > 1e-30 && q0_norm_budget > 0.0 && n_diag_remaining > 0) {
-            double per_col_budget =
-                remaining_budget / sqrt((double)n_diag_remaining);
-            double s_cap = per_col_budget / sqrt(q);
-            if (s_star > s_cap) s_star = s_cap;
-          }
-          if (s_star > 1e4) s_star = 1e4;
-          double scale = sqrt(s_star);
-          CUBLAS_CHECK(cublasDscal(state->blas_handle, dim, &scale, col, 1));
-          double used_c = sqrt(q) * s_star;
-          double newrem = remaining_budget * remaining_budget - used_c * used_c;
-          remaining_budget = (newrem > 0.0) ? sqrt(newrem) : 0.0;
-        }
-      } else if (eigvec != NULL && !is_batched) {
-        if (blk->psd_cone_rescaling != NULL) {
-          CUBLAS_CHECK(cublasDdgmm(state->blas_handle, CUBLAS_SIDE_LEFT, dim,
-                                   actual_inc, eigvec, dim,
-                                   blk->psd_cone_rescaling, 1, new_cols, dim));
-        } else {
-          CUDA_CHECK(cudaMemcpy(new_cols, eigvec, new_elements * sizeof(double),
-                                cudaMemcpyDeviceToDevice));
-        }
-      } else {
-
-        unsigned aug_seed =
-            (unsigned)(0x9E3779B9u +
-                       (unsigned)state->num_outer_iteration * 2654435761u +
-                       (unsigned)b * 40503u);
-        randomize_device_array(new_cols, new_elements, aug_seed);
-        double noise_scale = 1e-4;
-        CUBLAS_CHECK(cublasDscal(state->blas_handle, new_elements, &noise_scale,
-                                 new_cols, 1));
-      }
+      CUDA_CHECK(cudaMemcpy(new_cols, new_columns[b],
+                            (size_t)new_elements * sizeof(double),
+                            cudaMemcpyDeviceToDevice));
     }
 
     tot_rank += new_rank;

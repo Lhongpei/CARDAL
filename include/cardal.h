@@ -32,6 +32,13 @@ extern "C" {
 typedef struct cardal_problem cardal_problem;
 typedef struct cardal_result  cardal_result;
 
+typedef enum {
+  CARDAL_AUGMENTATION_RANDOM = 0,
+  CARDAL_AUGMENTATION_QP = 1,
+  CARDAL_AUGMENTATION_CLOSED_FORM = 2,
+  CARDAL_AUGMENTATION_SDP = 3
+} cardal_augmentation_mode;
+
 /* -----------------------------------------------------------------------
  * Parameters (POD, ABI-stable). All doubles / ints; no pointers.
  *
@@ -53,6 +60,7 @@ typedef struct {
   /* Burer–Monteiro rank management. -1 => auto. */
   int    initial_rank;              /* auto: ceil(2*log m) */
   int    max_rank;                  /* auto: Pataki bound */
+  int    augmentation_mode;         /* cardal_augmentation_mode; default random */
 
   /* Inner solver + penalty schedule. */
   int    lbfgs_history_size;        /* default 5 */

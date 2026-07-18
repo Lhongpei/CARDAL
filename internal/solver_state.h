@@ -15,12 +15,13 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
                         int *theoretical_max_rank_per_blk,
                         const rescale_info_t *rescale_info);
 
+void randomize_device_array(double *d_array, size_t length, unsigned seed);
+
 void free_solver_state(cardal_sdp_solver_state_t *state);
 
 void augment_system_rank(cardal_sdp_solver_state_t *state,
                          const int *rank_incs,
-                         double *const *neg_eigvecs,
-                         double *const *neg_eigvals);
+                         double *const *new_columns);
 
 void build_cone_batches(cardal_sdp_solver_state_t *state);
 void refresh_cone_batches(cardal_sdp_solver_state_t *state);

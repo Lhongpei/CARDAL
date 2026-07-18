@@ -6,6 +6,7 @@
 #define SOLVER_CORE_OP_CUH
 
 #include "batched_cone_ops.h"
+#include "rank_lift.h"
 #include "solver_state.h"
 #include "utils.h"
 #include "sdp_op.h"
@@ -1304,45 +1305,17 @@ FREE_LANCZOS_BUFFERS(cardal_sdp_solver_state_t *state,
 
 static inline int
 CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(cardal_sdp_solver_state_t *state) {
-  int *rank_incs = (int *)calloc(state->n_blks, sizeof(int));
+  int *direction_counts = (int *)calloc(state->n_blks, sizeof(int));
   double **neg_eigvecs = (double **)calloc(state->n_blks, sizeof(double *));
   double **neg_eigvals = (double **)calloc(state->n_blks, sizeof(double *));
 
-  update_al_gradient_S(state);
-  double al_min_eigval = 1e9;
+  // The caller has just constructed the true dual slack S(y). Do not replace
+  // it with the augmented-Lagrangian gradient or a penalty-only operator.
+  double global_min_eigval = 1e9;
   int total_neg_count = 0;
-  RUN_PER_CONE_LANCZOS(state, rank_incs, neg_eigvecs, neg_eigvals,
-                       &al_min_eigval, &total_neg_count);
+  RUN_PER_CONE_LANCZOS(state, direction_counts, neg_eigvecs, neg_eigvals,
+                       &global_min_eigval, &total_neg_count);
 
-  double perturb_fnorm = compute_penalty_perturbation_fnorm(state);
-  int trust_al_sig = (fabs(al_min_eigval) > ALORA_TRUST_C * perturb_fnorm);
-  int near_feasible = (state->relative_primal_residual < 1e-3);
-  int trust_al = trust_al_sig || near_feasible;
-
-  if (state->verbose >= 3)
-    printf(">>> AL-gradient min eig: %.4e ; rho*||A*q0||_F: %.4e ; "
-           "trust_AL=%d (sig=%d, near_feasible=%d, rel_pres=%.2e)\n",
-           al_min_eigval, perturb_fnorm, trust_al, trust_al_sig,
-           near_feasible, state->relative_primal_residual);
-
-  if (!trust_al && total_neg_count > 0) {
-    if (state->verbose >= 3)
-      printf(">>> AL signal dominated by perturbation; switching to "
-             "feasibility (rho*A*q0) eigenvectors.\n");
-    FREE_LANCZOS_BUFFERS(state, neg_eigvecs, neg_eigvals);
-    memset(rank_incs, 0, state->n_blks * sizeof(int));
-    update_penalty_only_S(state);
-    double feas_min_eigval = 1e9;
-    int feas_total_neg = 0;
-    RUN_PER_CONE_LANCZOS(state, rank_incs, neg_eigvecs, neg_eigvals,
-                         &feas_min_eigval, &feas_total_neg);
-    total_neg_count = feas_total_neg;
-    if (state->verbose >= 3)
-      printf(">>> Feasibility-operator min eig: %.4e ; total neg: %d\n",
-             feas_min_eigval, feas_total_neg);
-  }
-
-  double global_min_eigval = al_min_eigval;
   if (state->lp_dim > 0) {
     double h_min_slack = COMPUTE_LP_MIN_SLACK(state);
     if (h_min_slack < global_min_eigval) {
@@ -1359,18 +1332,25 @@ CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(cardal_sdp_solver_state_t *state) {
     state->relative_dual_residual = 0.0;
   }
 
+  int total_added = 0;
   if (total_neg_count > 0) {
     if (state->verbose >= 3)
-      printf(">>> Augment: %d negative eigenvalues across blocks (signal: %s)\n",
-             total_neg_count, trust_al ? "AL gradient" : "rho*A*q0");
-    augment_system_rank(state, rank_incs, neg_eigvecs, neg_eigvals);
+      printf(">>> Augment: %d negative dual-slack directions across blocks\n",
+             total_neg_count);
+    rank_lift_correction_t correction;
+    initialize_rank_lift_correction(state, &correction);
+    total_added = solve_joint_rank_lift(
+        state, direction_counts, neg_eigvecs, neg_eigvals, &correction);
+    if (total_added > 0)
+      augment_system_rank(state, correction.rank_incs, correction.d_columns);
+    free_rank_lift_correction(state, &correction);
   }
 
   FREE_LANCZOS_BUFFERS(state, neg_eigvecs, neg_eigvals);
   free(neg_eigvecs);
   free(neg_eigvals);
-  free(rank_incs);
-  return total_neg_count;
+  free(direction_counts);
+  return total_added;
 }
 
 static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(

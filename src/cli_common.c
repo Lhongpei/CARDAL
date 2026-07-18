@@ -146,6 +146,21 @@ int cli_apply_solver_opt(int opt, const char *optarg,
   case CLI_OPT_EPS_GAP:
     params->termination_criteria.eps_optimal_relative = atof(optarg);
     return 1;
+  case CLI_OPT_AUGMENTATION_MODE:
+    if (strcmp(optarg, "random") == 0)
+      params->augmentation_mode = AUGMENTATION_MODE_RANDOM;
+    else if (strcmp(optarg, "qp") == 0)
+      params->augmentation_mode = AUGMENTATION_MODE_QP;
+    else if (strcmp(optarg, "closed-form") == 0 ||
+             strcmp(optarg, "closed_form") == 0)
+      params->augmentation_mode = AUGMENTATION_MODE_CLOSED_FORM;
+    else if (strcmp(optarg, "sdp") == 0)
+      params->augmentation_mode = AUGMENTATION_MODE_SDP;
+    else
+      fprintf(stderr, "Unknown --augmentation-mode value: %s "
+                      "(use random | qp | closed-form | sdp)\n",
+              optarg);
+    return 1;
   }
   return 0;
 }
@@ -156,6 +171,8 @@ void cli_print_solver_param_help(void) {
          "(Default: Auto 2*log(m))\n");
   printf("  -R, --max-rank <int>    Hard upper bound on per-block rank "
          "(Default: Auto ceil((sqrt(8m+1)-1)/2))\n");
+  printf("      --augmentation-mode <mode> Rank augmentation backend: "
+         "random | qp | closed-form | sdp (Default: random)\n");
   printf("  -e, --eps <float>       Set primal, dual, and gap tolerances "
          "(Default: 1e-4)\n");
   printf("      --eps-primal <flt>  Relative primal residual tolerance "

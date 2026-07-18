@@ -239,6 +239,7 @@ typedef struct {
   int lbfgs_history_size;
   double penalty_coef;
   double penalty_factor;
+  augmentation_mode_t augmentation_mode;
   double step_size;
   double primal_objective;
   double dual_objective;

@@ -70,6 +70,7 @@ void cardal_default_params(cardal_params *p) {
   p->iteration_limit        = d.termination_criteria.iteration_limit;
   p->initial_rank           = d.initial_rank;
   p->max_rank               = d.max_rank;
+  p->augmentation_mode      = (int)d.augmentation_mode;
   p->lbfgs_history_size     = d.lbfgs_history_size;
   p->penalty_factor         = d.penalty_factor;
   p->initial_penalty_coef   = d.initial_penalty_coef;
@@ -93,6 +94,9 @@ static void cardal_params_to_internal(const cardal_params *src,
   dst->termination_criteria.iteration_limit       = src->iteration_limit;
   dst->initial_rank           = src->initial_rank;
   dst->max_rank               = src->max_rank;
+  if (src->augmentation_mode >= CARDAL_AUGMENTATION_RANDOM &&
+      src->augmentation_mode <= CARDAL_AUGMENTATION_SDP)
+    dst->augmentation_mode = (augmentation_mode_t)src->augmentation_mode;
   dst->lbfgs_history_size     = src->lbfgs_history_size;
   dst->penalty_factor         = src->penalty_factor;
   dst->initial_penalty_coef   = src->initial_penalty_coef;

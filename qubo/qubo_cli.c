@@ -106,6 +106,8 @@ int main(int argc, char *argv[]) {
       {"round-seed", required_argument, 0, 'S'},
       {"rank", required_argument, 0, 'r'},
       {"max-rank", required_argument, 0, 'R'},
+      {"augmentation-mode", required_argument, 0,
+       CLI_OPT_AUGMENTATION_MODE},
       {"eps", required_argument, 0, 'e'},
       {"eps-primal", required_argument, 0, CLI_OPT_EPS_PRIMAL},
       {"eps-dual", required_argument, 0, CLI_OPT_EPS_DUAL},

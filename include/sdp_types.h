@@ -116,9 +116,17 @@ typedef struct {
   int iteration_limit;
 } termination_criteria_t;
 
+typedef enum {
+  AUGMENTATION_MODE_RANDOM = 0,
+  AUGMENTATION_MODE_QP = 1,
+  AUGMENTATION_MODE_CLOSED_FORM = 2,
+  AUGMENTATION_MODE_SDP = 3,
+} augmentation_mode_t;
+
 typedef struct {
   int initial_rank;
   int max_rank;
+  augmentation_mode_t augmentation_mode;
   int lbfgs_history_size;
   double penalty_factor;
   double initial_penalty_coef;

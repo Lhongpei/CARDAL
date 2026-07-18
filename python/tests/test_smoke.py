@@ -55,10 +55,12 @@ def test_default_params_shape():
     p = Model.default_params()
     for key in ("eps_optimal_relative", "eps_primal_relative",
                 "eps_dual_relative",
-                "time_sec_limit", "iteration_limit", "verbose"):
+                "time_sec_limit", "iteration_limit", "augmentation_mode",
+                "verbose"):
         assert key in p
     assert p["eps_primal_relative"] == 1e-4
     assert p["eps_dual_relative"] == 1e-4
+    assert p["augmentation_mode"] == "random"
 
 
 def test_solve_before_read_file_raises():
