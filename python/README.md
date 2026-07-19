@@ -214,7 +214,7 @@ Every parameter is passed as a keyword argument to `Model.solve`. `Model.default
 | `max_rank`                   | int    | `-1`           | Rank cap per cone; `-1` uses the Pataki bound $\lceil(\sqrt{8m+1}-1)/2\rceil$.  |
 | `augmentation_mode`          | string | `random`       | Rank augmentation backend: `random`, `qp`, `closed-form`, or `sdp`.             |
 | `lbfgs_history_size`         | int    | `5`            | L-BFGS memory length used by the inner solver.                                  |
-| `penalty_factor`             | float  | `1.2`          | Multiplicative ALM penalty update per outer step.                               |
+| `penalty_factor`             | float  | `3.3`          | Multiplicative ALM penalty update per outer step.                               |
 | `initial_penalty_coef`       | float  | `-1.0`         | Starting ALM penalty $\beta$; `-1.0` uses $2/\sqrt{N}$.                         |
 | `max_penalty_coef`           | float  | `5e5`          | Upper cap on $\beta$.                                                           |
 | `inner_iterations_limit`     | int    | `30000`        | Inner L-BFGS iteration cap per outer step.                                      |

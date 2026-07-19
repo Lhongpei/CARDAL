@@ -730,7 +730,7 @@ void set_default_parameters(cardal_parameters_t *params) {
   params->termination_criteria.iteration_limit = 20000000;
   params->inner_iterations_limit = 30000;
   params->initial_penalty_coef = -1.0;
-  params->penalty_factor = 1.2;
+  params->penalty_factor = 3.3;
   params->max_penalty_coef = 5e5;
   params->lbfgs_history_size = 5;
   params->verbose = 2;

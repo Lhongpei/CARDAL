@@ -64,7 +64,7 @@ typedef struct {
 
   /* Inner solver + penalty schedule. */
   int    lbfgs_history_size;        /* default 5 */
-  double penalty_factor;            /* default 1.2 */
+  double penalty_factor;            /* default 3.3 */
   double initial_penalty_coef;      /* -1.0 => auto (2/sqrt N) */
   double max_penalty_coef;          /* default 5e5 */
   long   inner_iterations_limit;    /* default 30000 (per outer iter cap) */

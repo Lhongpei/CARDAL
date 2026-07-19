@@ -114,7 +114,7 @@ print(result.status, result.primal_objective, result.rel_objective_gap)
 | `--augmentation-mode` | string | Rank augmentation backend: `random`, `qp`, `closed-form`, or `sdp`. | `random` |
 | `-i, --inner-iters` | int | L-BFGS iteration limit per outer step. | `30000` |
 | `-o, --outer-iters` | int | Augmented-Lagrangian outer iteration limit. | `20000000` |
-| `-p, --penalty-fac` | float | Penalty coefficient multiplier. | `1.2` |
+| `-p, --penalty-fac` | float | Penalty coefficient multiplier. | `3.3` |
 | `-c, --init-penalty` | float | Initial penalty coefficient. | `2 / sqrt(N)` |
 | `-M, --max-penalty` | float | Maximum penalty coefficient. | `5e5` |
 | `-L, --lbfgs-hist` | int | L-BFGS history size. | `5` |

@@ -186,7 +186,7 @@ void cli_print_solver_param_help(void) {
   printf("  -o, --outer-iters <int> Outer loop iteration limit "
          "(Default: 20000000)\n");
   printf("  -p, --penalty-fac <flt> Penalty multiplier factor "
-         "(Default: 1.2)\n");
+         "(Default: 3.3)\n");
   printf("  -M, --max-penalty <flt> Max penalty coefficient "
          "(Default: 5e5)\n");
   printf("  -T, --time-limit <sec>  Wall-time budget in seconds "

@@ -60,6 +60,7 @@ def test_default_params_shape():
         assert key in p
     assert p["eps_primal_relative"] == 1e-4
     assert p["eps_dual_relative"] == 1e-4
+    assert p["penalty_factor"] == 3.3
     assert p["augmentation_mode"] == "random"
 
 

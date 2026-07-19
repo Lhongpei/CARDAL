@@ -306,8 +306,7 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
       state->consecutive_gate_pass = 0;
     }
     if (force_combo || allow_rho_jump) {
-      const double rho_jump = 3.33;
-      state->penalty_coef *= rho_jump;
+      state->penalty_coef *= state->penalty_factor;
       if (params->max_penalty_coef > 0.0 &&
           state->penalty_coef > params->max_penalty_coef) {
         state->penalty_coef = params->max_penalty_coef;
