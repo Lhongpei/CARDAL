@@ -14,13 +14,23 @@ The interface is intentionally small: one class (`Model`), one frozen dataclass 
 
 - Python 3.9+
 - `numpy >= 1.21`
-- Optional: `scipy >= 1.8` (sparse-matrix input), `cvxpy >= 1.4` (cross-checking small instances)
+- Optional: `scipy >= 1.8` for sparse-matrix input
 - A working CUDA 12.x toolchain (`nvcc`) matched to your host compiler; see the [main README](../README.md) for the full hardware/toolchain matrix
 - An NVIDIA GPU with compute capability 7.0-9.0 (Volta through Hopper)
 
-### Install from source
+### Install from PyPI
 
-CARDAL is not yet on PyPI; install from a checkout:
+```bash
+pip install cardal
+```
+
+Optional extras:
+
+```bash
+pip install "cardal[scipy]"   # scipy >= 1.8, for scipy.sparse inputs
+```
+
+### Install from source
 
 ```bash
 git clone https://github.com/Lhongpei/CARDAL.git
@@ -28,19 +38,17 @@ cd CARDAL
 pip install .
 ```
 
-Optional extras and a developer install:
+For an editable developer install:
 
 ```bash
-pip install ".[scipy]"      # scipy >= 1.8, for scipy.sparse inputs
-pip install ".[cvxpy]"      # cvxpy >= 1.4
 pip install -e ".[dev]"     # pytest, editable install
 pytest python/tests
 ```
 
-The wheel is built with `scikit-build-core` and compiles the CUDA extension in place. If the system `nvcc` is too old, point scikit-build at a newer toolchain via `CUDACXX` before invoking `pip install`:
+During installation, pip uses `scikit-build-core` to compile the CUDA extension and build a local wheel. If the system `nvcc` is too old, point scikit-build at a newer toolchain via `CUDACXX` before invoking `pip install`:
 
 ```bash
-CUDACXX=/usr/local/cuda-12.6/bin/nvcc pip install .
+CUDACXX=/usr/local/cuda-12.6/bin/nvcc pip install cardal
 ```
 
 The CMake project also honours `SKBUILD_CMAKE_ARGS` for pass-through configuration (e.g. `SKBUILD_CMAKE_ARGS="-DENABLE_MATIO=OFF"`).
@@ -309,5 +317,5 @@ except KeyboardInterrupt:
 - **Off-diagonals look under-weighted.** CARDAL reads only the lower triangle (`row >= col`) and does *not* implicitly double off-diagonals. Provide exactly one triangle; do not pre-symmetrize or pre-scale.
 - **Ctrl-C during `solve()` returns no result.** By design: `SIGINT` flips the cancel flag, the solver breaks at the next outer boundary, and the binding re-raises `KeyboardInterrupt`.
 - **`nvcc: command not found` or CUDA too old during `pip install`.** Export `CUDACXX=/usr/local/cuda-12.6/bin/nvcc` (or your actual path) before invoking `pip install`.
-- **Sparse matrix rejected.** Install the `scipy` extra: `pip install ".[scipy]"`.
+- **Sparse matrix rejected.** Install the `scipy` extra: `pip install "cardal[scipy]"`.
 - **Wanted multi-GPU from Python.** The Python front-end is single-GPU only. Use the C CLI under `mpirun`; see the [main README](../README.md).

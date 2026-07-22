@@ -54,7 +54,13 @@ The main binary lands at `./build/cardal`. A sibling binary `./build/cardal_qubo
 
 ### Python package
 
-CARDAL also ships a NumPy-friendly Python front-end (single-GPU only), see [python/README.md](./python/README.md).
+CARDAL ships a NumPy-friendly, single-GPU Python package on [PyPI](https://pypi.org/project/cardal/):
+
+```bash
+pip install cardal
+```
+
+The package compiles its CUDA extension during installation, so a working CUDA 12.x toolchain is required. See [python/README.md](./python/README.md) for optional dependencies, source builds, and the complete Python API.
 
 ## Quickstart
 
