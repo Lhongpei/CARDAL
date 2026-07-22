@@ -1,10 +1,10 @@
 # CARDAL: A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Distributed](https://img.shields.io/badge/Multiple_GPUs-optional-brightgreen.svg)](https://www.open-mpi.org/) [![SDPLIB](https://img.shields.io/badge/Input-SDPA%20%7C%20SeDuMi%20%7C%20SDPT3-lightgrey.svg)](https://github.com/vsdp/SDPLIB) [![Interface](https://img.shields.io/badge/Interface-Python%20%7C%20C-lightyellow.svg)](https://github.com/vsdp/SDPLIB)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![PyPI version](https://badge.fury.io/py/cardal.svg)](https://pypi.org/project/cardal/) [![arXiv](https://img.shields.io/badge/arXiv-2607.17933-b31b1b.svg)](https://arxiv.org/abs/2607.17933) [![Distributed](https://img.shields.io/badge/Multiple_GPUs-optional-brightgreen.svg)](https://www.open-mpi.org/) [![SDPLIB](https://img.shields.io/badge/Input-SDPA%20%7C%20SeDuMi%20%7C%20SDPT3-lightgrey.svg)](https://github.com/vsdp/SDPLIB) [![Interface](https://img.shields.io/badge/Interface-Python%20%7C%20C-lightyellow.svg)](https://github.com/vsdp/SDPLIB)
 
 **CARDAL** is a curvature-aware, rank-adaptive, distributed augmented-Lagrangian solver for large-scale semidefinite programs. It operates on a Burer-Monteiro low-rank factorization and supports both single- and multi-GPU systems. CARDAL targets semidefinite programs whose optimal solutions are (or are expected to be) low-rank.
 
-A companion manuscript of CARDAL is in preparation.
+The CARDAL paper is available on arXiv: [A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs](https://arxiv.org/abs/2607.17933).
 
 
 
@@ -160,8 +160,21 @@ mpirun -n 8 ./build/cardal -f problem.dat-s --grid_size 1,1,8
 
 ## Citation
 
-A manuscript describing CARDAL is in preparation. Until then, cite the
-software metadata in [CITATION.cff](CITATION.cff).
+If you use CARDAL in academic work, please cite the [companion paper](https://arxiv.org/abs/2607.17933):
+
+```bibtex
+@misc{li2026curvatureawarerankadaptivedistributedaugmentedlagrangian,
+  title        = {A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs},
+  author       = {Hongpei Li and Huikang Liu and Dongdong Ge and Yinyu Ye},
+  year         = {2026},
+  eprint       = {2607.17933},
+  archivePrefix = {arXiv},
+  primaryClass = {math.OC},
+  url          = {https://arxiv.org/abs/2607.17933}
+}
+```
+
+Machine-readable citation metadata is also available in [CITATION.cff](CITATION.cff).
 
 ## License
 

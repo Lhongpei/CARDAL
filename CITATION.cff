@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use CARDAL in academic work, please cite this software record and the companion paper once available."
+message: "If you use CARDAL in academic work, please cite the companion paper below."
 title: "CARDAL: A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs"
 authors:
   - family-names: Li
@@ -10,3 +10,18 @@ date-released: 2026-07-14
 license: Apache-2.0
 repository-code: "https://github.com/Lhongpei/CARDAL"
 url: "https://github.com/Lhongpei/CARDAL"
+preferred-citation:
+  type: article
+  title: "A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs"
+  authors:
+    - family-names: Li
+      given-names: Hongpei
+    - family-names: Liu
+      given-names: Huikang
+    - family-names: Ge
+      given-names: Dongdong
+    - family-names: Ye
+      given-names: Yinyu
+  year: 2026
+  doi: "10.48550/arXiv.2607.17933"
+  url: "https://arxiv.org/abs/2607.17933"
