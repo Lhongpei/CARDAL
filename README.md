@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![PyPI version](https://badge.fury.io/py/cardal.svg)](https://pypi.org/project/cardal/) [![arXiv](https://img.shields.io/badge/arXiv-2607.17933-b31b1b.svg)](https://arxiv.org/abs/2607.17933) [![Distributed](https://img.shields.io/badge/Multiple_GPUs-optional-brightgreen.svg)](https://www.open-mpi.org/) [![SDPLIB](https://img.shields.io/badge/Input-SDPA%20%7C%20SeDuMi%20%7C%20SDPT3-lightgrey.svg)](https://github.com/vsdp/SDPLIB) [![Interface](https://img.shields.io/badge/Interface-Python%20%7C%20C-lightyellow.svg)](https://github.com/vsdp/SDPLIB)
 
-**CARDAL** is a curvature-aware, rank-adaptive, distributed augmented-Lagrangian solver for large-scale semidefinite programs. It operates on a Burer-Monteiro low-rank factorization and supports both single- and multi-GPU systems. CARDAL targets semidefinite programs whose optimal solutions are (or are expected to be) low-rank.
+**CARDAL** is an open-source GPU low-rank solver for large-scale semidefinite programs with distributed multi-GPU support. It operates on a Burer-Monteiro low-rank factorization and targets semidefinite programs whose optimal solutions are (or are expected to be) low-rank.
 
 The CARDAL paper is available on arXiv: [A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs](https://arxiv.org/abs/2607.17933).
 
@@ -157,6 +157,10 @@ mpirun -n 8 ./build/cardal -f problem.dat-s --grid_size 1,1,8
 - **`nvcc: command not found`, or CUDA too old.** Export `CUDACXX=/usr/local/cuda-12.6/bin/nvcc` before invoking `cmake`.
 - **CLI build fails with missing MPI.** MPI is on by default; reconfigure with `-DENABLE_MPI=OFF` for a single-GPU build.
 - **QUBO input rejected.** The main `cardal` binary refuses QUBO instances; use `cardal_qubo` (`./build/cardal_qubo -h`).
+
+## Contributing
+
+Contributions and pull requests are welcome.
 
 ## Citation
 
