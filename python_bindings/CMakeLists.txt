@@ -7,6 +7,8 @@
 # top-level configure is called with -DCARDAL_BUILD_PYTHON=ON (typically
 # via scikit-build-core / pip install).
 
+set(PYBIND11_FINDPYTHON ON)
+find_package(Python 3.9 COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
 
 pybind11_add_module(_core MODULE _core.cpp)

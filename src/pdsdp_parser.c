@@ -134,6 +134,9 @@ basic_sdp_t *read_pdsdp_npz(const char *filename) {
   long long nnz_C = 0;
   int *C_cone = NULL, *C_row = NULL, *C_col = NULL;
   double *C_val = NULL;
+  double *lp_obj = NULL;
+  int *a_row = NULL, *a_col = NULL;
+  double *a_val = NULL;
   if (e_C) {
     if (e_C->dtype != NPY_DTYPE_F64 || e_C->n_dim != 2 || e_C->shape[1] != 4) {
       fprintf(stderr, "pdsdp: C must be float64 with shape (nnz, 4)\n");
@@ -183,7 +186,6 @@ basic_sdp_t *read_pdsdp_npz(const char *filename) {
   // c is sometimes stored as uint8 (0/1 indicator under SOS mode); cast to
   // double regardless of source dtype.
   int lp_dim = 0;
-  double *lp_obj = NULL;
   int negate_lp_obj = (e_c && !e_C);
   if (e_c && e_c->dtype != NPY_DTYPE_UNKNOWN) {
     lp_dim = (int)e_c->n_elements;
@@ -237,8 +239,6 @@ basic_sdp_t *read_pdsdp_npz(const char *filename) {
 
   // ---- LP constraint nnz (a) ----
   long long nnz_a = 0;
-  int *a_row = NULL, *a_col = NULL;
-  double *a_val = NULL;
   if (e_a) {
     if (e_a->dtype != NPY_DTYPE_F64 || e_a->n_dim != 2 || e_a->shape[1] != 3) {
       fprintf(stderr, "pdsdp: a must be float64 with shape (nnz, 3)\n");

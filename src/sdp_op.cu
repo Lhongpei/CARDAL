@@ -318,8 +318,8 @@ static void project_psd(double *S, int r, double *scratch_evec,
 // U = D V, L = U^T G U. Writes W = U S^{1/2} into d_new_cols.
 double solve_alora_sdp_percone(cardal_sdp_solver_state_t *state,
                                block_low_rank_state_t *blk, const double *d_V,
-                               const double *h_lambda, int r, double rho,
-                               double q0_norm_budget, double *d_new_cols) {
+                               int r, double rho, double q0_norm_budget,
+                               double *d_new_cols) {
   int dim = blk->dim;
   int m = state->num_constraints;
   int P = svec_len(r);

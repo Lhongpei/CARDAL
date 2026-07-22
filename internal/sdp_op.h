@@ -56,8 +56,8 @@ void compute_rank_lift_A_uv(cardal_sdp_solver_state_t *state,
 // PERCONE only. q0_norm_budget <= 0 disables trust cap. Returns realized ||Cs||.
 double solve_alora_sdp_percone(cardal_sdp_solver_state_t *state,
                                block_low_rank_state_t *blk, const double *d_V,
-                               const double *h_lambda, int r, double rho,
-                               double q0_norm_budget, double *d_new_cols);
+                               int r, double rho, double q0_norm_budget,
+                               double *d_new_cols);
 
 void compute_RD_DD_block(int blk_idx, cardal_sdp_solver_state_t *state);
 
