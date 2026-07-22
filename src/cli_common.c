@@ -196,7 +196,7 @@ void cli_print_solver_param_help(void) {
          "(Default: Auto 2/sqrt(N))\n");
   printf("  -v, --verbose <int>     Log level: 0=silent, 1=banner+summary, "
          "2=+sections+iter, 3=debug (default 2)\n");
-  printf("  -z, --grid_size <r,n[,k]>  Grid topology for MPI: "
+  printf("  -z, --grid-size <r,n[,k]>  Grid topology for MPI: "
          "r=row (constraint) axis, n=rank (BM-col) axis, "
          "k=cone axis (default 1)\n");
   printf("  -O, --output-dir <path> Directory to write <instance>_summary.txt "
@@ -204,17 +204,17 @@ void cli_print_solver_param_help(void) {
   printf("  -h, --help              Print this help message and exit\n");
   printf("\n");
   printf("Scaling (preconditioning):\n");
-  printf("      --l_inf_ruiz_iter <int>     Iterations for L-inf Ruiz "
+  printf("      --l-inf-ruiz-iter <int>     Iterations for L-inf Ruiz "
          "rescaling (default 10; 0 disables)\n");
-  printf("      --no_pock_chambolle         Disable Pock-Chambolle "
+  printf("      --no-pock-chambolle         Disable Pock-Chambolle "
          "rescaling (default enabled)\n");
-  printf("      --pock_chambolle_alpha <flt> Value for Pock-Chambolle "
+  printf("      --pock-chambolle-alpha <flt> Value for Pock-Chambolle "
          "alpha (default 1.0)\n");
-  printf("      --no_bound_obj_rescaling    Disable bound-objective "
+  printf("      --no-bound-obj-rescaling    Disable bound-objective "
          "rescaling (default enabled)\n");
-  printf("      --no_scaling                Disable ALL scaling stages "
+  printf("      --no-scaling                Disable ALL scaling stages "
          "(equivalent to the three flags above + ruiz=0)\n");
-  printf("      --psd_scale_mode <mode>     PSD cone scaling style: "
+  printf("      --psd-scale-mode <mode>     PSD cone scaling style: "
          "per-element (D=diag(d_k), default) or per-cone (uniform s_k*I)\n");
   printf("      --shuffle <mode>            Pre-partition constraint reorder "
          "(distributed only): none | uniform | block | col (default col)\n");

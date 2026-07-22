@@ -678,7 +678,7 @@ void select_valid_grid_size(const cardal_parameters_t *params,
                         "User specified grid:  %d x %d x %d = %d processes\n",
                         provided_row, provided_rank, provided_cone, product);
                 fprintf(stderr, "Actual MPI world size: %d processes\n", world_size);
-                fprintf(stderr, "Please adjust mpirun -n or --grid_size.\n");
+                fprintf(stderr, "Please adjust mpirun -n or --grid-size.\n");
                 fprintf(stderr, "------------------------------------------------\n");
             }
             MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);

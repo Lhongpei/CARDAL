@@ -86,6 +86,11 @@ params_from_dict(const py::dict &d) {
         "initial_penalty_coef",
         "max_penalty_coef",
         "inner_iterations_limit",
+        "l_inf_ruiz_iterations",
+        "pock_chambolle_rescaling",
+        "pock_chambolle_alpha",
+        "bound_objective_rescaling",
+        "psd_scale_mode",
         "verbose",
     };
     auto is_known = [&](const std::string &k) {
@@ -135,6 +140,40 @@ params_from_dict(const py::dict &d) {
         else if (key == "initial_penalty_coef")   p.initial_penalty_coef   = v.cast<double>();
         else if (key == "max_penalty_coef")       p.max_penalty_coef       = v.cast<double>();
         else if (key == "inner_iterations_limit") p.inner_iterations_limit = v.cast<long>();
+        else if (key == "l_inf_ruiz_iterations") {
+            p.l_inf_ruiz_iterations = v.cast<int>();
+            if (p.l_inf_ruiz_iterations < 0)
+                throw py::value_error(
+                    "l_inf_ruiz_iterations must be nonnegative");
+        }
+        else if (key == "pock_chambolle_rescaling")
+            p.pock_chambolle_rescaling = v.cast<bool>() ? 1 : 0;
+        else if (key == "pock_chambolle_alpha") {
+            p.pock_chambolle_alpha = v.cast<double>();
+            if (p.pock_chambolle_alpha < 0.0)
+                throw py::value_error(
+                    "pock_chambolle_alpha must be nonnegative");
+        }
+        else if (key == "bound_objective_rescaling")
+            p.bound_objective_rescaling = v.cast<bool>() ? 1 : 0;
+        else if (key == "psd_scale_mode") {
+            if (py::isinstance<py::str>(v)) {
+                std::string mode = v.cast<std::string>();
+                if (mode == "per-element")
+                    p.psd_scale_mode = CARDAL_PSD_SCALE_PER_ELEMENT;
+                else if (mode == "per-cone")
+                    p.psd_scale_mode = CARDAL_PSD_SCALE_PER_CONE;
+                else
+                    throw py::value_error(
+                        "psd_scale_mode must be 'per-element' or 'per-cone'");
+            } else {
+                p.psd_scale_mode = v.cast<int>();
+                if (p.psd_scale_mode != CARDAL_PSD_SCALE_PER_ELEMENT &&
+                    p.psd_scale_mode != CARDAL_PSD_SCALE_PER_CONE)
+                    throw py::value_error(
+                        "psd_scale_mode integer is outside the valid enum range");
+            }
+        }
         else if (key == "verbose")                p.verbose                = v.cast<int>();
     }
     return p;
@@ -189,7 +228,7 @@ PYBIND11_MODULE(_core, m) {
               "ergonomic API).";
 
     // ----- Version marker: bump on ABI-visible changes ------------------
-    m.attr("__abi_version__") = py::int_(2);
+    m.attr("__abi_version__") = py::int_(3);
 
     // ----- Status enum --------------------------------------------------
     py::enum_<cardal_status>(m, "Status")
@@ -300,6 +339,16 @@ PYBIND11_MODULE(_core, m) {
               d["initial_penalty_coef"]   = p.initial_penalty_coef;
               d["max_penalty_coef"]       = p.max_penalty_coef;
               d["inner_iterations_limit"] = p.inner_iterations_limit;
+              d["l_inf_ruiz_iterations"]  = p.l_inf_ruiz_iterations;
+              d["pock_chambolle_rescaling"] =
+                  p.pock_chambolle_rescaling != 0;
+              d["pock_chambolle_alpha"]   = p.pock_chambolle_alpha;
+              d["bound_objective_rescaling"] =
+                  p.bound_objective_rescaling != 0;
+              d["psd_scale_mode"] =
+                  p.psd_scale_mode == CARDAL_PSD_SCALE_PER_CONE
+                      ? "per-cone"
+                      : "per-element";
               d["verbose"]                = p.verbose;
               return d;
           },

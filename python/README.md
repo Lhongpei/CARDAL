@@ -226,9 +226,17 @@ Every parameter is passed as a keyword argument to `Model.solve`. `Model.default
 | `initial_penalty_coef`       | float  | `-1.0`         | Starting ALM penalty $\beta$; `-1.0` uses $2/\sqrt{N}$.                         |
 | `max_penalty_coef`           | float  | `5e5`          | Upper cap on $\beta$.                                                           |
 | `inner_iterations_limit`     | int    | `30000`        | Inner L-BFGS iteration cap per outer step.                                      |
+| `l_inf_ruiz_iterations`      | int    | `10`           | Number of L-infinity Ruiz scaling iterations; `0` disables this stage.          |
+| `pock_chambolle_rescaling`   | bool   | `True`         | Enable Pock-Chambolle scaling.                                                  |
+| `pock_chambolle_alpha`       | float  | `1.0`          | Pock-Chambolle scaling exponent.                                                |
+| `bound_objective_rescaling`  | bool   | `True`         | Enable bound-objective rescaling.                                               |
+| `psd_scale_mode`             | string | `per-element`  | PSD scaling mode: `per-element` or `per-cone`.                                  |
 | `verbose`                    | int    | `2`            | `0` silent; `1` banner + summary; `2` + iter table; `3` debug.                  |
 
-Additional preconditioner/scaling switches are exposed only through the C CLI (`--l_inf_ruiz_iter`, `--pock_chambolle_alpha`, `--psd_scale_mode`, `--no_scaling`, `--no_pock_chambolle`, `--no_bound_obj_rescaling`) &mdash; leave them at their defaults unless retuning. Discover every accepted Python kwarg programmatically:
+To disable all scaling, set `l_inf_ruiz_iterations=0`,
+`pock_chambolle_rescaling=False`, and
+`bound_objective_rescaling=False`. Discover every accepted Python kwarg
+programmatically:
 
 ```python
 defaults = cardal.Model.default_params()

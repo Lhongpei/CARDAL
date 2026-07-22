@@ -132,14 +132,14 @@ print(result.status, result.primal_objective, result.rel_objective_gap)
 
 | Option | Type | Description | Default |
 |:-------|:-----|:------------|:--------|
-| `-z, --grid_size` | string | MPI grid as `row,rank,cone`; dimensions must multiply to the MPI process count. | Auto |
+| `-z, --grid-size` | string | MPI grid as `row,rank,cone`; dimensions must multiply to the MPI process count. | Auto |
 | `--shuffle` | string | Distributed constraint ordering: `none`, `uniform`, `block`, or `col`. | `col` |
-| `--l_inf_ruiz_iter` | int | Number of L-infinity Ruiz scaling iterations; `0` disables them. | `10` |
-| `--pock_chambolle_alpha` | float | Pock-Chambolle scaling exponent. | `1.0` |
-| `--no_pock_chambolle` | flag | Disable Pock-Chambolle scaling. | Off |
-| `--no_bound_obj_rescaling` | flag | Disable bound-objective rescaling. | Off |
-| `--psd_scale_mode` | string | PSD scaling mode: `per-element` or `per-cone`. | `per-element` |
-| `--no_scaling` | flag | Disable all scaling stages. | Off |
+| `--l-inf-ruiz-iter` | int | Number of L-infinity Ruiz scaling iterations; `0` disables them. | `10` |
+| `--pock-chambolle-alpha` | float | Pock-Chambolle scaling exponent. | `1.0` |
+| `--no-pock-chambolle` | flag | Disable Pock-Chambolle scaling. | Off |
+| `--no-bound-obj-rescaling` | flag | Disable bound-objective rescaling. | Off |
+| `--psd-scale-mode` | string | PSD scaling mode: `per-element` or `per-cone`. | `per-element` |
+| `--no-scaling` | flag | Disable all scaling stages. | Off |
 
 Run `./build/cardal -h` for the authoritative CLI help. The Python interface
 uses the same solver defaults; its keyword parameters are documented in
@@ -154,8 +154,8 @@ The same binary auto-detects an MPI launch and switches to the distributed solve
 mpirun -n 4 ./build/cardal -f problem.dat-s -O ./output
 
 # Explicit row x rank x cone grid
-mpirun -n 4 ./build/cardal -f problem.dat-s --grid_size 2,2,1
-mpirun -n 8 ./build/cardal -f problem.dat-s --grid_size 1,1,8
+mpirun -n 4 ./build/cardal -f problem.dat-s --grid-size 2,2,1
+mpirun -n 8 ./build/cardal -f problem.dat-s --grid-size 1,1,8
 ```
 
 ### Troubleshooting

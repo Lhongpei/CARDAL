@@ -76,6 +76,11 @@ void cardal_default_params(cardal_params *p) {
   p->initial_penalty_coef   = d.initial_penalty_coef;
   p->max_penalty_coef       = d.max_penalty_coef;
   p->inner_iterations_limit = (long)d.inner_iterations_limit;
+  p->l_inf_ruiz_iterations  = d.l_inf_ruiz_iterations;
+  p->pock_chambolle_rescaling = d.has_pock_chambolle_alpha ? 1 : 0;
+  p->pock_chambolle_alpha   = d.pock_chambolle_alpha;
+  p->bound_objective_rescaling = d.bound_objective_rescaling ? 1 : 0;
+  p->psd_scale_mode         = d.psd_scale_mode;
   p->verbose                = d.verbose;
 }
 
@@ -102,6 +107,14 @@ static void cardal_params_to_internal(const cardal_params *src,
   dst->initial_penalty_coef   = src->initial_penalty_coef;
   dst->max_penalty_coef       = src->max_penalty_coef;
   dst->inner_iterations_limit = (double)src->inner_iterations_limit;
+  dst->l_inf_ruiz_iterations =
+      src->l_inf_ruiz_iterations > 0 ? src->l_inf_ruiz_iterations : 0;
+  dst->has_pock_chambolle_alpha = src->pock_chambolle_rescaling != 0;
+  dst->pock_chambolle_alpha = src->pock_chambolle_alpha;
+  dst->bound_objective_rescaling = src->bound_objective_rescaling != 0;
+  if (src->psd_scale_mode == CARDAL_PSD_SCALE_PER_ELEMENT ||
+      src->psd_scale_mode == CARDAL_PSD_SCALE_PER_CONE)
+    dst->psd_scale_mode = src->psd_scale_mode;
   dst->verbose                = src->verbose;
 }
 

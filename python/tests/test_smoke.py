@@ -56,12 +56,20 @@ def test_default_params_shape():
     for key in ("eps_optimal_relative", "eps_primal_relative",
                 "eps_dual_relative",
                 "time_sec_limit", "iteration_limit", "augmentation_mode",
+                "l_inf_ruiz_iterations", "pock_chambolle_rescaling",
+                "pock_chambolle_alpha", "bound_objective_rescaling",
+                "psd_scale_mode",
                 "verbose"):
         assert key in p
     assert p["eps_primal_relative"] == 1e-4
     assert p["eps_dual_relative"] == 1e-4
     assert p["penalty_factor"] == 3.3
     assert p["augmentation_mode"] == "random"
+    assert p["l_inf_ruiz_iterations"] == 10
+    assert p["pock_chambolle_rescaling"] is True
+    assert p["pock_chambolle_alpha"] == 1.0
+    assert p["bound_objective_rescaling"] is True
+    assert p["psd_scale_mode"] == "per-element"
 
 
 def test_solve_before_read_file_raises():

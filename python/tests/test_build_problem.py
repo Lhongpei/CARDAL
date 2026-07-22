@@ -47,12 +47,37 @@ def test_set_problem_dense_smallest_eig():
         eps_optimal_relative=1e-6,
         eps_primal_relative=1e-6,
         eps_dual_relative=1e-6,
+        l_inf_ruiz_iterations=0,
+        pock_chambolle_rescaling=False,
+        pock_chambolle_alpha=0.5,
+        bound_objective_rescaling=False,
+        psd_scale_mode="per-cone",
         verbose=0,
     )
     assert result.status is cardal.OPTIMAL, f"got {result.status}"
     # Primal objective should equal lambda_min(H) = 1.0
     assert abs(result.primal_objective - 1.0) < 1e-3, \
         f"got primal={result.primal_objective:.6f}"
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value", "message"),
+    [
+        ("l_inf_ruiz_iterations", -1, "must be nonnegative"),
+        ("pock_chambolle_alpha", -1.0, "must be nonnegative"),
+        ("psd_scale_mode", "diagonal", "per-element.*per-cone"),
+    ],
+)
+def test_invalid_scaling_parameter_raises(parameter, value, message):
+    m = Model()
+    m.set_problem(
+        block_dims=[2],
+        C=[np.eye(2)],
+        A=[[np.eye(2)]],
+        b=[1.0],
+    )
+    with pytest.raises(ValueError, match=message):
+        m.solve(**{parameter: value})
 
 
 def test_set_problem_sparse_smallest_eig():

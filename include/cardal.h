@@ -39,6 +39,11 @@ typedef enum {
   CARDAL_AUGMENTATION_SDP = 3
 } cardal_augmentation_mode;
 
+typedef enum {
+  CARDAL_PSD_SCALE_PER_ELEMENT = 0,
+  CARDAL_PSD_SCALE_PER_CONE = 1
+} cardal_psd_scale_mode;
+
 /* -----------------------------------------------------------------------
  * Parameters (POD, ABI-stable). All doubles / ints; no pointers.
  *
@@ -71,6 +76,13 @@ typedef struct {
 
   /* Logging. 0=silent, 1=banner+summary, 2=+iter table, 3=debug. */
   int    verbose;
+
+  /* Preconditioning and scaling. Boolean fields use 0=false, 1=true. */
+  int    l_inf_ruiz_iterations;       /* default 10; 0 disables */
+  int    pock_chambolle_rescaling;    /* default 1 */
+  double pock_chambolle_alpha;        /* default 1.0 */
+  int    bound_objective_rescaling;   /* default 1 */
+  int    psd_scale_mode;              /* cardal_psd_scale_mode */
 } cardal_params;
 
 /* -----------------------------------------------------------------------
