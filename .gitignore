@@ -57,6 +57,7 @@ dkms.conf
 
 # ignored files
 build/*
+/dist/
 test/*
 /.vscode
 /.venv
