@@ -12,7 +12,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "cardal"
-version = "0.0.1"
+version = "0.1.0"
 description = "Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs"
 readme = "README.md"
 requires-python = ">=3.9"

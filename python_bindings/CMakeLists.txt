@@ -44,7 +44,7 @@ find_program(PYBIND11_STUBGEN pybind11-stubgen)
 if(PYBIND11_STUBGEN)
     add_custom_command(TARGET _core POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E env
-                PYTHONPATH=$<TARGET_FILE_DIR:_core>
+                PYTHONPATH=$<TARGET_FILE_DIR:_core>:$ENV{PYTHONPATH}
                 ${PYBIND11_STUBGEN}
                     --output-dir ${CMAKE_CURRENT_BINARY_DIR}
                     --ignore-invalid-expressions ".*"

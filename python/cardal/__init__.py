@@ -16,11 +16,16 @@ Quick start:
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .enums import TerminationReason
 from .model import Model
 from .result import Result
 
-__version__ = "0.0.1"
+try:
+    __version__ = version("cardal")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 __all__ = [
     "__version__",

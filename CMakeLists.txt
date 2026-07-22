@@ -7,7 +7,7 @@ option(CARDAL_BUILD_PYTHON   "Build the CARDAL pybind11 module"       OFF)
 option(CARDAL_BUILD_CLI      "Build the cardal CLI"                    ON)
 option(CARDAL_BUILD_QUBO     "Build the QUBO auxiliary library + CLI" ON)
 
-project(cardal VERSION 0.0.1 LANGUAGES C CXX CUDA)
+project(cardal VERSION 0.1.0 LANGUAGES C CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
