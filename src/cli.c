@@ -71,6 +71,71 @@ static int ensure_output_dir(const char *path) {
   return -1;
 }
 
+static int save_double_vector(const double *data, long long length,
+                              const char *output_dir, const char *instance_name,
+                              const char *suffix) {
+  if (length < 0 || (data == NULL && length > 0) || output_dir == NULL ||
+      instance_name == NULL)
+    return -1;
+
+  char *file_path = get_output_path(output_dir, instance_name, suffix);
+  FILE *outfile = fopen(file_path, "w");
+  if (outfile == NULL) {
+    fprintf(stderr, "Error opening solution file '%s': %s\n", file_path,
+            strerror(errno));
+    free(file_path);
+    return -1;
+  }
+
+  int failed = 0;
+  for (long long i = 0; i < length; i++) {
+    if (fprintf(outfile, "%.17g\n", data[i]) < 0) {
+      failed = 1;
+      break;
+    }
+  }
+  if (fclose(outfile) != 0)
+    failed = 1;
+
+  if (failed)
+    fprintf(stderr, "Error writing solution file '%s': %s\n", file_path,
+            strerror(errno));
+  free(file_path);
+  return failed ? -1 : 0;
+}
+
+static int save_int_vector(const int *data, int length, const char *output_dir,
+                           const char *instance_name, const char *suffix) {
+  if (length < 0 || (data == NULL && length > 0) || output_dir == NULL ||
+      instance_name == NULL)
+    return -1;
+
+  char *file_path = get_output_path(output_dir, instance_name, suffix);
+  FILE *outfile = fopen(file_path, "w");
+  if (outfile == NULL) {
+    fprintf(stderr, "Error opening solution file '%s': %s\n", file_path,
+            strerror(errno));
+    free(file_path);
+    return -1;
+  }
+
+  int failed = 0;
+  for (int i = 0; i < length; i++) {
+    if (fprintf(outfile, "%d\n", data[i]) < 0) {
+      failed = 1;
+      break;
+    }
+  }
+  if (fclose(outfile) != 0)
+    failed = 1;
+
+  if (failed)
+    fprintf(stderr, "Error writing solution file '%s': %s\n", file_path,
+            strerror(errno));
+  free(file_path);
+  return failed ? -1 : 0;
+}
+
 static void write_cone_size_distribution(FILE *outfile,
                                          const compressed_sdp_problem_t *prob) {
   if (prob == NULL || prob->n_blks <= 0)
@@ -167,6 +232,21 @@ static void save_solver_summary(const sdp_result_t *result,
 
   fclose(outfile);
   free(file_path);
+}
+
+static void save_solver_solutions(const sdp_result_t *result,
+                                  const char *output_dir,
+                                  const char *instance_name) {
+  if (result == NULL || output_dir == NULL || instance_name == NULL)
+    return;
+
+  save_double_vector(result->low_rank_primal_solution,
+                     result->low_rank_solution_length, output_dir,
+                     instance_name, "_primal_factor.txt");
+  save_int_vector(result->rank_list, result->n_cones, output_dir, instance_name,
+                  "_rank_list.txt");
+  save_double_vector(result->dual_solution, result->num_constraints, output_dir,
+                     instance_name, "_dual_solution.txt");
 }
 
 void print_usage(const char *prog_name) {
@@ -454,6 +534,7 @@ int main(int argc, char *argv[]) {
   if (rank == 0 && result != NULL && summary_path != NULL &&
       instance_name != NULL) {
     save_solver_summary(result, prob, output_dir, instance_name);
+    save_solver_solutions(result, output_dir, instance_name);
   }
 
   free(summary_path);

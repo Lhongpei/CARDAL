@@ -1,0 +1,95 @@
+site_name: CARDAL
+site_description: Documentation for the CARDAL GPU low-rank SDP solver
+site_url: https://lhongpei.github.io/CARDAL/
+repo_name: Lhongpei/CARDAL
+repo_url: https://github.com/Lhongpei/CARDAL
+edit_uri: edit/main/docs/
+copyright: Copyright 2026 Hongpei Li
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Usage:
+      - Problem Definition: using-cardal/problem-definition.md
+      - Python Interface: using-cardal/python.md
+      - C API: using-cardal/c-api.md
+      - Command-Line Interface: using-cardal/cli.md
+      - File Formats: using-cardal/file-formats.md
+      - Results and Outputs: using-cardal/results.md
+  - Parameters: parameters.md
+  - Multi-GPU: multi-gpu.md
+  - FAQ: faq.md
+  - Paper and Citation: paper-and-citation.md
+
+theme:
+  name: material
+  language: en
+  font: false
+  icon:
+    logo: material/cube-outline
+    repo: fontawesome/brands/github
+  features:
+    - content.code.copy
+    - content.tabs.link
+    - navigation.footer
+    - navigation.expand
+    - navigation.indexes
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Lhongpei/CARDAL
+      name: CARDAL on GitHub
+    - icon: material/file-document-outline
+      link: https://arxiv.org/abs/2607.17933
+      name: CARDAL paper on arXiv
+
+exclude_docs: |
+  requirements.txt

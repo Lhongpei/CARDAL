@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](../pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg)](https://developer.nvidia.com/cuda-toolkit)
 
-Python bindings for **CARDAL**, a GPU-accelerated Augmented Lagrangian solver for large-scale semidefinite programs on a Burer-Monteiro low-rank factorization. For the CLI, distributed builds, citation, and the top-level project overview see the [main README](../README.md).
+Python bindings for **CARDAL**, a GPU-accelerated Augmented Lagrangian solver for large-scale semidefinite programs on a Burer-Monteiro low-rank factorization. For the CLI, distributed builds, citation, and the top-level project overview see the [documentation](https://lhongpei.github.io/CARDAL/).
 
 The interface is intentionally small: one class (`Model`), one frozen dataclass (`Result`), one `IntEnum` (`TerminationReason`), and a solver-knob dictionary discovered via `Model.default_params()`. The Python build is **single-GPU only** &mdash; for multi-GPU runs use the C CLI under `mpirun`.
 

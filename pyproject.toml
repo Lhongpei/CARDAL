@@ -39,7 +39,7 @@ dependencies = [
 Homepage = "https://github.com/Lhongpei/CARDAL"
 Repository = "https://github.com/Lhongpei/CARDAL"
 Issues = "https://github.com/Lhongpei/CARDAL/issues"
-Documentation = "https://github.com/Lhongpei/CARDAL#readme"
+Documentation = "https://lhongpei.github.io/CARDAL/"
 Paper = "https://arxiv.org/abs/2607.17933"
 
 [project.optional-dependencies]

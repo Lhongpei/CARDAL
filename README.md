@@ -1,6 +1,6 @@
 # CARDAL: A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for Large-Scale SDPs
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![PyPI version](https://badge.fury.io/py/cardal.svg)](https://pypi.org/project/cardal/) [![arXiv](https://img.shields.io/badge/arXiv-2607.17933-b31b1b.svg)](https://arxiv.org/abs/2607.17933) [![Distributed](https://img.shields.io/badge/Multiple_GPUs-optional-brightgreen.svg)](https://www.open-mpi.org/) [![SDPLIB](https://img.shields.io/badge/Input-SDPA%20%7C%20SeDuMi%20%7C%20SDPT3-lightgrey.svg)](https://github.com/vsdp/SDPLIB) [![Interface](https://img.shields.io/badge/Interface-Python%20%7C%20C-lightyellow.svg)](https://github.com/vsdp/SDPLIB)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Documentation](https://img.shields.io/badge/docs-GitHub_Pages-173f35.svg)](https://lhongpei.github.io/CARDAL/) [![PyPI version](https://badge.fury.io/py/cardal.svg)](https://pypi.org/project/cardal/) [![arXiv](https://img.shields.io/badge/arXiv-2607.17933-b31b1b.svg)](https://arxiv.org/abs/2607.17933) [![Distributed](https://img.shields.io/badge/Multiple_GPUs-optional-brightgreen.svg)](https://www.open-mpi.org/) [![SDPLIB](https://img.shields.io/badge/Input-SDPA%20%7C%20SeDuMi%20%7C%20SDPT3-lightgrey.svg)](https://github.com/vsdp/SDPLIB) [![Interface](https://img.shields.io/badge/Interface-Python%20%7C%20C-lightyellow.svg)](https://lhongpei.github.io/CARDAL/using-cardal/python/)
 
 **CARDAL** is an open-source GPU low-rank solver for large-scale semidefinite programs with distributed multi-GPU support. It operates on a Burer-Monteiro low-rank factorization and targets semidefinite programs whose optimal solutions are (or are expected to be) low-rank.
 
@@ -72,7 +72,9 @@ CARDAL auto-detects SDPA, MATLAB, and PDSDP input formats:
 ./build/cardal -f problem.dat-s -O ./output
 ```
 
-The solve summary is printed to the terminal. Passing `-O ./output` also writes it to `./output/<instance>_summary.txt` for post-processing.
+The solve summary is printed to the terminal. Passing `-O ./output` also
+writes the summary, low-rank primal factor, per-cone rank list, and dual
+solution to `./output`.
 
 ### CLI
 
@@ -126,7 +128,7 @@ print(result.status, result.primal_objective, result.rel_objective_gap)
 | `-L, --lbfgs-hist` | int | L-BFGS history size. | `5` |
 | `-T, --time-limit` | float | Wall-clock limit in seconds; `0` disables it. | `3600` |
 | `-v, --verbose` | int | Log level: `0` silent, `1` summary, `2` iterations, `3` debug. | `2` |
-| `-O, --output-dir` | path | Write `<instance>_summary.txt` to this directory. | None |
+| `-O, --output-dir` | path | Write the summary, primal factor, rank list, and dual solution. | None |
 
 #### Distributed and scaling parameters
 

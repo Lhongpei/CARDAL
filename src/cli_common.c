@@ -199,8 +199,10 @@ void cli_print_solver_param_help(void) {
   printf("  -z, --grid-size <r,n[,k]>  Grid topology for MPI: "
          "r=row (constraint) axis, n=rank (BM-col) axis, "
          "k=cone axis (default 1)\n");
-  printf("  -O, --output-dir <path> Directory to write <instance>_summary.txt "
-         "into (created if missing)\n");
+  printf("  -O, --output-dir <path> Directory to write the summary, primal "
+         "factor,\n");
+  printf("                          rank list, and dual solution (created if "
+         "missing)\n");
   printf("  -h, --help              Print this help message and exit\n");
   printf("\n");
   printf("Scaling (preconditioning):\n");
