@@ -78,8 +78,7 @@ cmake -S . -B build -DCARDAL_BUILD_QUBO=OFF
 ```python
 import cardal
 
-model = cardal.Model()
-model.read_file("problem.dat-s")
+model = cardal.Model.read_file("problem.dat-s")
 result = model.solve(
     time_sec_limit=60.0,
     eps_primal_relative=1e-4,

@@ -88,8 +88,7 @@ solution to `./output`.
 ```python
 import cardal
 
-m = cardal.Model()
-m.read_file("problem.dat-s")                       # or .dat-s.gz / .mat / .npz
+m = cardal.Model.read_file("problem.dat-s")        # or .dat-s.gz / .mat / .npz
 result = m.solve(
     time_sec_limit=60.0,
     eps_primal_relative=1e-4,

@@ -6,8 +6,7 @@
 Typical usage::
 
     import cardal
-    m = cardal.Model()
-    m.read_file("problem.dat-s")
+    m = cardal.Model.read_file("problem.dat-s")
     result = m.solve(time_sec_limit=60.0, eps_primal_relative=1e-4,
                      eps_dual_relative=1e-4, eps_optimal_relative=1e-4)
     print(result.summary())
@@ -111,10 +110,9 @@ def _lp_matrix_to_coo(mat, num_constraints: int, lp_dim: int):
 class Model:
     """A CARDAL SDP model.
 
-    A ``Model`` is an empty shell after construction. Call :meth:`read_file`
-    to load a problem, then :meth:`solve` to run the solver. The same
-    ``Model`` can be reused across problems by calling :meth:`read_file`
-    again; each call replaces the internal handle.
+    A ``Model`` is an empty shell after construction. Use :meth:`read_file`
+    to construct a model from a problem file, or :meth:`load_file` to replace
+    the problem held by an existing model.
 
     Results are returned as immutable :class:`cardal.Result` objects and
     are NOT stored on the ``Model``.
@@ -125,12 +123,28 @@ class Model:
     def __init__(self) -> None:
         self._problem: Optional["_core.Problem"] = None
 
-    def read_file(self, path: Union[str, os.PathLike]) -> None:
-        """Load an SDPA / MATLAB / PDSDP file.
+    @classmethod
+    def read_file(cls, path: Union[str, os.PathLike]) -> "Model":
+        """Construct a model from an SDPA / MATLAB / PDSDP file.
+
+        Format is auto-detected from the file header.
+
+        Raises
+        ------
+        FileNotFoundError
+            If ``path`` does not exist.
+        ValueError
+            If the file cannot be parsed.
+        """
+        model = cls()
+        model.load_file(path)
+        return model
+
+    def load_file(self, path: Union[str, os.PathLike]) -> None:
+        """Replace this model's problem with one loaded from a file.
 
         Format is auto-detected from the file header. Any previously loaded
-        problem is discarded (the underlying C handle is dropped when the
-        old reference goes out of scope).
+        problem is discarded when the old underlying C handle is released.
 
         Raises
         ------
@@ -351,7 +365,7 @@ class Model:
         Raises
         ------
         RuntimeError
-            If :meth:`read_file` has not been called.
+            If no problem has been loaded or constructed.
         TypeError
             If ``params`` contains a key not returned by
             :meth:`default_params`.
@@ -365,7 +379,7 @@ class Model:
             An immutable :class:`cardal.Result` snapshot.
         """
         if self._problem is None:
-            raise RuntimeError("no problem loaded; call read_file() first")
+            raise RuntimeError("no problem loaded; load or construct one first")
         core_result = _core.solve(self._problem, params)
         return _make_result(core_result)
 
@@ -381,7 +395,7 @@ class Model:
     # ----- Problem metadata ------------------------------------------------
     #
     # Read-only pass-through properties. Each raises RuntimeError if
-    # read_file() has not been called yet (loud misuse beats silent None).
+    # No problem has been loaded yet (loud misuse beats silent None).
 
     @property
     def num_cones(self) -> int:
@@ -411,7 +425,7 @@ class Model:
     def _require_problem(self) -> "_core.Problem":
         p = self._problem
         if p is None:
-            raise RuntimeError("no problem loaded; call read_file() first")
+            raise RuntimeError("no problem loaded; load or construct one first")
         return p
 
     def __repr__(self) -> str:

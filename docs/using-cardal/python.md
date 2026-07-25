@@ -20,14 +20,18 @@ python -m pip install "cardal[scipy]"
 ```python
 import cardal
 
-model = cardal.Model()
-model.read_file("problem.dat-s")
+model = cardal.Model.read_file("problem.dat-s")
 result = model.solve(verbose=1)
 
 print(result.summary())
 ```
 
-`read_file` replaces any problem previously held by the model.
+`Model.read_file` constructs and returns a loaded model. To replace the problem
+held by an existing model, use:
+
+```python
+model.load_file("another-problem.dat-s")
+```
 
 ## Construct from block matrices
 
@@ -135,7 +139,8 @@ print(defaults)
 | Member | Description |
 |:--|:--|
 | `Model()` | Create an empty reusable model |
-| `read_file(path)` | Load a supported problem file |
+| `Model.read_file(path)` | Construct a model from a supported problem file |
+| `load_file(path)` | Replace the problem held by an existing model |
 | `set_problem(...)` | Build from dense or sparse block matrices |
 | `set_problem_coo(...)` | Build from raw COO arrays |
 | `solve(**params)` | Solve and return an immutable `Result` |
@@ -153,4 +158,3 @@ Pressing Ctrl-C during `solve` requests cooperative cancellation and raises
 flag is cleared before the next solve.
 
 See [Results and Outputs](results.md) for the `Result` fields and status codes.
-

@@ -28,8 +28,7 @@ FE4S4_SKIP_REASON = (
 @pytest.mark.skipif(not os.path.exists(FE4S4),
                     reason=FE4S4_SKIP_REASON)
 def test_solve_fe4s4():
-    m = Model()
-    m.read_file(FE4S4)
+    m = Model.read_file(FE4S4)
     result = m.solve(
         time_sec_limit=5.0,
         eps_optimal_relative=1e-2,
@@ -78,11 +77,23 @@ def test_solve_before_read_file_raises():
         m.solve()
 
 
+def test_read_file_missing_path_raises():
+    with pytest.raises(FileNotFoundError):
+        Model.read_file("/definitely/not/a/cardal/problem.dat-s")
+
+
+@pytest.mark.skipif(not os.path.exists(FE4S4),
+                    reason=FE4S4_SKIP_REASON)
+def test_load_file_replaces_problem():
+    m = Model()
+    assert m.load_file(FE4S4) is None
+    assert m.num_cones == 3
+
+
 def test_unknown_param_raises():
     if not os.path.exists(FE4S4):
         pytest.skip(FE4S4_SKIP_REASON)
-    m = Model()
-    m.read_file(FE4S4)
+    m = Model.read_file(FE4S4)
     with pytest.raises(TypeError, match="unknown parameter"):
         m.solve(definitely_not_a_real_parameter=42)
 
@@ -98,8 +109,7 @@ def test_cancel_raises_keyboard_interrupt():
 
     from cardal import _core
 
-    m = Model()
-    m.read_file(FE4S4)
+    m = Model.read_file(FE4S4)
 
     def request_cancel_after_delay():
         time.sleep(0.5)

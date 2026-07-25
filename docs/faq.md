@@ -19,9 +19,9 @@ passing `scipy.sparse` matrices to `Model.set_problem`.
 
 ## Can a `Model` be reused?
 
-Yes. Calling `read_file`, `set_problem`, or `set_problem_coo` replaces the
-current problem. Previously returned `Result` objects remain valid and
-independent.
+Yes. Calling `load_file`, `set_problem`, or `set_problem_coo` replaces the
+current problem. `Model.read_file` constructs a new loaded model. Previously
+returned `Result` objects remain valid and independent.
 
 ## Are Python result arrays copied?
 
@@ -55,4 +55,3 @@ CARDAL requests cooperative cancellation and Python raises
 Yes. Pull requests are welcome. Keep changes focused, include a test when
 behavior changes, and describe the CUDA and MPI configurations used for
 validation.
-

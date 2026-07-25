@@ -41,8 +41,7 @@ pip install cardal
 ```python
 import cardal
 
-model = cardal.Model()
-model.read_file("problem.dat-s")
+model = cardal.Model.read_file("problem.dat-s")
 
 result = model.solve(
     eps_primal_relative=1e-4,
@@ -104,4 +103,3 @@ The algorithm is described in
 [A Curvature-Aware Rank-Adaptive Distributed Augmented-Lagrangian Solver for
 Large-Scale SDPs](https://arxiv.org/abs/2607.17933). Citation metadata and
 BibTeX are available on the [Paper and Citation](paper-and-citation.md) page.
-

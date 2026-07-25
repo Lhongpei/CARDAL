@@ -62,8 +62,7 @@ CARDAL reads SDPA (`.dat-s`, `.dat-s.gz`), MATLAB (`.mat`), and PDSDP (`.npz`) f
 ```python
 import cardal
 
-m = cardal.Model()
-m.read_file("problem.dat-s")                       # or .dat-s.gz / .mat / .npz
+m = cardal.Model.read_file("problem.dat-s")        # or .dat-s.gz / .mat / .npz
 
 result = m.solve(
     time_sec_limit=60.0,
@@ -84,7 +83,14 @@ if result.status is cardal.OPTIMAL:
 print(result.summary())                            # multi-line human-readable report
 ```
 
-The same `Model` is reusable: calling `m.read_file(...)` again swaps the underlying problem, and every `m.solve(...)` returns an independent immutable `Result`. SDPLIB instances such as `fe4s4_sos.dat-s` are available at [github.com/vsdp/SDPLIB](https://github.com/vsdp/SDPLIB). The random-problem generators (`maxcut`, `snl`, `quantum_order`) are exposed only through the C CLI's `-g` flag &mdash; there is no `load_generator` in Python; produce a `.dat-s` file with the CLI first and read it back.
+`Model.read_file(...)` constructs and returns a loaded model. Use
+`m.load_file(...)` to replace the problem held by an existing model. Every
+`m.solve(...)` returns an independent immutable `Result`. SDPLIB instances such
+as `fe4s4_sos.dat-s` are available at
+[github.com/vsdp/SDPLIB](https://github.com/vsdp/SDPLIB). The random-problem
+generators (`maxcut`, `snl`, `quantum_order`) are exposed only through the C
+CLI's `-g` flag; there is no `load_generator` in Python. Produce a `.dat-s`
+file with the CLI first and read it back.
 
 ### From NumPy arrays
 
@@ -189,7 +195,8 @@ Second-order cones, exponential cones, and generic bounded cones are **not** sup
 | Symbol                            | Purpose                                                                                                    |
 |:----------------------------------|:-----------------------------------------------------------------------------------------------------------|
 | `cardal.Model()`                  | Construct an empty model. Reusable across problems.                                                        |
-| `m.read_file(path)`               | Parse an SDPA/MATLAB/PDSDP file (auto-detected) and replace the internal handle. Raises `FileNotFoundError` if the path is missing and `ValueError` on parse failure. |
+| `Model.read_file(path)`           | Construct and return a model from an auto-detected SDPA/MATLAB/PDSDP file. Raises `FileNotFoundError` if the path is missing and `ValueError` on parse failure. |
+| `m.load_file(path)`               | Replace an existing model's problem from a supported file.                                                 |
 | `m.set_problem(**kwargs)`         | Build from lists of dense `numpy` or `scipy.sparse` matrices per block.                                    |
 | `m.set_problem_coo(**kwargs)`     | Low-level entry: build from raw COO triplet arrays (5 arrays for the constraints, 4 for the objective, plus `b`). |
 | `m.solve(**params)`               | Solve the loaded problem. Returns a frozen `cardal.Result`. Raises `RuntimeError` if no problem was loaded and `TypeError` on unknown kwargs. |
@@ -304,8 +311,7 @@ def _cancel_after(delay):
     time.sleep(delay)
     _core.request_cancel()
 
-m = cardal.Model()
-m.read_file("big.dat-s")
+m = cardal.Model.read_file("big.dat-s")
 threading.Thread(target=_cancel_after, args=(5.0,), daemon=True).start()
 
 try:
@@ -319,9 +325,9 @@ except KeyboardInterrupt:
 ## Troubleshooting
 
 - **`TypeError: unknown parameter '<name>'` from `m.solve()`.** CARDAL does not silently accept unknown kwargs. Cross-check against `cardal.Model.default_params().keys()`.
-- **`RuntimeError: no problem loaded` from `m.solve()` or a property.** Call `m.read_file(...)`, `m.set_problem(...)`, or `m.set_problem_coo(...)` first.
-- **`FileNotFoundError` from `m.read_file(...)`.** Verify absolute vs relative path, and that `.dat-s.gz` files are actually gzip-compressed.
-- **`ValueError` from `m.read_file(...)`.** The parser could not identify the header; check the file is SDPA sparse `.dat-s` / `.dat-s.gz`, MATLAB `.mat`, or PDSDP `.npz`.
+- **`RuntimeError: no problem loaded` from `m.solve()` or a property.** Use `Model.read_file(...)`, `m.load_file(...)`, `m.set_problem(...)`, or `m.set_problem_coo(...)` first.
+- **`FileNotFoundError` from `Model.read_file(...)`.** Verify absolute vs relative path, and that `.dat-s.gz` files are actually gzip-compressed.
+- **`ValueError` from `Model.read_file(...)`.** The parser could not identify the header; check the file is SDPA sparse `.dat-s` / `.dat-s.gz`, MATLAB `.mat`, or PDSDP `.npz`.
 - **Off-diagonals look under-weighted.** CARDAL reads only the lower triangle (`row >= col`) and does *not* implicitly double off-diagonals. Provide exactly one triangle; do not pre-symmetrize or pre-scale.
 - **Ctrl-C during `solve()` returns no result.** By design: `SIGINT` flips the cancel flag, the solver breaks at the next outer boundary, and the binding re-raises `KeyboardInterrupt`.
 - **`nvcc: command not found` or CUDA too old during `pip install`.** Export `CUDACXX=/usr/local/cuda-12.6/bin/nvcc` (or your actual path) before invoking `pip install`.

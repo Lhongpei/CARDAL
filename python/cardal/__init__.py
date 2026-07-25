@@ -8,8 +8,7 @@ A tiny, user-facing wrapper over the C/CUDA solver.
 Quick start:
 
     >>> import cardal
-    >>> m = cardal.Model()
-    >>> m.read_file("fe4s4_sos.dat-s")
+    >>> m = cardal.Model.read_file("fe4s4_sos.dat-s")
     >>> result = m.solve(time_sec_limit=5.0)
     >>> print(result.status, result.primal_objective)
 """
