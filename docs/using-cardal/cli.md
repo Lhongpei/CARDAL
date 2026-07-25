@@ -17,7 +17,7 @@ Add an output directory to retain the summary and solution:
 ./build/cardal -f problem.dat-s -O results
 ```
 
-CARDAL writes four files under `results`:
+CARDAL always writes these four files under `results`:
 
 ```text
 <instance>_summary.txt
@@ -25,6 +25,9 @@ CARDAL writes four files under `results`:
 <instance>_rank_list.txt
 <instance>_dual_solution.txt
 ```
+
+Problems with linear blocks additionally produce
+`<instance>_lp_primal.txt` and/or `<instance>_free_primal.txt`.
 
 See [Results and Outputs](results.md#cli-output-files) for the factor layout.
 

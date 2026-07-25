@@ -33,6 +33,15 @@ __global__ void compute_lp_gradient_kernel(double *__restrict__ lp_grad,
                                            const double *__restrict__ dual_prod,
                                            const double *__restrict__ lp_v,
                                            int lp_dim);
+__global__ void compute_free_primal_kernel(
+    double *__restrict__ primal_sol, const double *__restrict__ free_x,
+    int free_dim);
+__global__ void compute_free_gradient_kernel(
+    double *__restrict__ free_grad, const double *__restrict__ free_obj,
+    const double *__restrict__ dual_prod, int free_dim);
+__global__ void compute_free_line_search_kernel(
+    const double *__restrict__ free_direction,
+    double *__restrict__ primal_cross, int free_dim);
 __global__ void compute_lp_line_search_kernel(const double *__restrict__ v,
                                               const double *__restrict__ dv,
                                               double *__restrict__ primal_rd,

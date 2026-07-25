@@ -36,6 +36,11 @@ MATLAB v5 containers are inspected for either:
 - SeDuMi variables such as `At` or `A`, `b`, `c`, and `K`
 - SDPT3 block data such as `blk`, `At`, `C`, and `b`
 
+The SeDuMi reader imports `K.f` as a native unrestricted block. The SDPT3
+reader likewise imports blocks tagged `u`. These variables remain
+unrestricted internally and are not converted into pairs of nonnegative
+variables.
+
 Configure a native build with MAT support:
 
 ```bash
@@ -57,7 +62,9 @@ The NPZ archive uses zero-based indices:
 | `a` | `float64`, `(nnz_lp, 3)` | No | `[constraint, lp_column, value]` |
 
 Each symmetric PSD entry is stored once. Both C- and Fortran-ordered NumPy
-arrays are accepted.
+arrays are accepted. The PDSDP NPZ schema currently has no free-variable
+entry; use a MATLAB file or an in-memory API when unrestricted variables are
+required.
 
 ## In-memory formats
 
@@ -67,7 +74,7 @@ Python and C callers do not need to serialize a file:
 - Python `Model.set_problem_coo` accepts parallel COO arrays.
 - C `cardal_build_problem` accepts `cardal_problem_data`.
 
-These APIs use lower-triangular `row, col` coordinates and zero-based indices.
-See [Problem Definition](problem-definition.md) for the shared matrix
-conventions.
-
+Both in-memory APIs natively accept nonnegative LP and unrestricted real
+blocks. PSD entries use lower-triangular `row, col` coordinates; all indices
+are zero-based. See [Problem Definition](problem-definition.md) for the shared
+matrix conventions.

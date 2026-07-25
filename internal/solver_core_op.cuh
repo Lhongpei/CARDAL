@@ -114,44 +114,61 @@ solve_line_search_tau_kernel(double *__restrict__ scalars, double penalty,
   double c = 0.5 * penalty * q1q1 + p2 + yq2 + penalty * q0q2;
   double dd = d_coef;
 
-  // Solve 4a x^3 + 3b x^2 + 2c x + d = 0 (Shengjin formula). roots[3].
-  double A = (3.0 * b) * (3.0 * b) - 3.0 * (4.0 * a) * (2.0 * c);
-  double B = (3.0 * b) * (2.0 * c) - 9.0 * (4.0 * a) * dd;
-  double C = (2.0 * c) * (2.0 * c) - 3.0 * (3.0 * b) * dd;
-  double delta = B * B - 4.0 * A * C;
-
+  // Solve 4a x^3 + 3b x^2 + 2c x + d = 0. Free-only directions
+  // legitimately reduce this to a quadratic or linear equation.
   double roots[3] = {0.0, 0.0, 0.0};
   int num_roots = 0;
   double aa = 4.0 * a, bb = 3.0 * b, cc = 2.0 * c;
-  if (A == 0.0 && B == 0.0) {
-    if (bb != 0.0) {
-      roots[0] = -cc / bb;
-      num_roots = 1;
+  const double coeff_eps = 1e-18;
+  if (fabs(aa) <= coeff_eps) {
+    if (fabs(bb) <= coeff_eps) {
+      if (fabs(cc) > coeff_eps) {
+        roots[0] = -dd / cc;
+        num_roots = 1;
+      }
+    } else {
+      double disc = cc * cc - 4.0 * bb * dd;
+      if (disc >= 0.0) {
+        double sqrt_disc = sqrt(disc);
+        roots[0] = (-cc - sqrt_disc) / (2.0 * bb);
+        roots[1] = (-cc + sqrt_disc) / (2.0 * bb);
+        num_roots = disc > 0.0 ? 2 : 1;
+      }
     }
-  } else if (delta > 0.0) {
-    double Y1 = A * bb + 1.5 * aa * (-B + sqrt(delta));
-    double Y2 = A * bb + 1.5 * aa * (-B - sqrt(delta));
-    roots[0] = (-bb - cbrt(Y1) - cbrt(Y2)) / (3.0 * aa);
-    num_roots = 1;
-  } else if (delta == 0.0 && A != 0.0 && B != 0.0) {
-    double K = B / A;
-    roots[0] = -bb / aa + K;
-    roots[1] = -K / 2.0;
-    num_roots = 2;
-  } else if (delta < 0.0) {
-    double sqA = sqrt(A);
-    double T = (A * bb - 1.5 * aa * B) / (A * sqA);
-    if (T > 1.0)
-      T = 1.0;
-    if (T < -1.0)
-      T = -1.0;
-    double theta = acos(T);
-    double csth = cos(theta / 3.0);
-    double sn3th = sqrt(3.0) * sin(theta / 3.0);
-    roots[0] = (-bb - 2.0 * sqA * csth) / (3.0 * aa);
-    roots[1] = (-bb + sqA * (csth + sn3th)) / (3.0 * aa);
-    roots[2] = (-bb + sqA * (csth - sn3th)) / (3.0 * aa);
-    num_roots = 3;
+  } else {
+    // Shengjin formula for the genuine cubic case.
+    double A = bb * bb - 3.0 * aa * cc;
+    double B = bb * cc - 9.0 * aa * dd;
+    double C = cc * cc - 3.0 * bb * dd;
+    double delta = B * B - 4.0 * A * C;
+    if (A == 0.0 && B == 0.0) {
+      roots[0] = -bb / (3.0 * aa);
+      num_roots = 1;
+    } else if (delta > 0.0) {
+      double Y1 = A * bb + 1.5 * aa * (-B + sqrt(delta));
+      double Y2 = A * bb + 1.5 * aa * (-B - sqrt(delta));
+      roots[0] = (-bb - cbrt(Y1) - cbrt(Y2)) / (3.0 * aa);
+      num_roots = 1;
+    } else if (delta == 0.0 && A != 0.0 && B != 0.0) {
+      double K = B / A;
+      roots[0] = -bb / aa + K;
+      roots[1] = -K / 2.0;
+      num_roots = 2;
+    } else if (delta < 0.0) {
+      double sqA = sqrt(A);
+      double T = (A * bb - 1.5 * aa * B) / (A * sqA);
+      if (T > 1.0)
+        T = 1.0;
+      if (T < -1.0)
+        T = -1.0;
+      double theta = acos(T);
+      double csth = cos(theta / 3.0);
+      double sn3th = sqrt(3.0) * sin(theta / 3.0);
+      roots[0] = (-bb - 2.0 * sqA * csth) / (3.0 * aa);
+      roots[1] = (-bb + sqA * (csth + sn3th)) / (3.0 * aa);
+      roots[2] = (-bb + sqA * (csth - sn3th)) / (3.0 * aa);
+      num_roots = 3;
+    }
   }
 
   double tau_max = tau_max_in > 0.0 ? tau_max_in : 1.0;
@@ -226,6 +243,59 @@ static inline double COMPUTE_LP_MIN_SLACK(cardal_sdp_solver_state_t *state) {
                         cudaMemcpyDeviceToHost));
 
   return h_min_slack;
+}
+
+static inline double
+COMPUTE_FREE_STATIONARITY(cardal_sdp_solver_state_t *state) {
+  if (state->free_dim <= 0)
+    return 0.0;
+
+  cublasPointerMode_t saved_mode;
+  CUBLAS_CHECK(cublasGetPointerMode(state->blas_handle, &saved_mode));
+  CUBLAS_CHECK(
+      cublasSetPointerMode(state->blas_handle, CUBLAS_POINTER_MODE_HOST));
+
+  double *d_stationarity = state->free_stationarity_buffer;
+  CUBLAS_CHECK(cublasDcopy(state->blas_handle, state->free_dim,
+                           state->free_objective_vector, 1, d_stationarity, 1));
+  double alpha = 1.0;
+  CUBLAS_CHECK(cublasDaxpy(
+      state->blas_handle, state->free_dim, &alpha,
+      state->dual_product + state->free_start_active_idx, 1, d_stationarity,
+      1));
+
+#ifdef IS_DISTRIBUTED
+  if (state->grid_context != NULL && state->grid_context->dims[0] > 1) {
+    NCCL_CHECK(ncclAllReduce(
+        d_stationarity, d_stationarity, state->free_dim, ncclDouble, ncclSum,
+        state->grid_context->nccl_row, 0));
+  }
+#endif
+
+  if (state->free_variable_rescaling != NULL) {
+    int blocks =
+        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    cudaStream_t stream;
+    CUBLAS_CHECK(cublasGetStream(state->blas_handle, &stream));
+    double inv_obj = (state->objective_vector_rescaling > 0.0)
+                         ? (1.0 / state->objective_vector_rescaling)
+                         : 1.0;
+    elementwise_multiply_scaled_kernel<<<blocks, THREADS_PER_BLOCK, 0, stream>>>(
+        d_stationarity, state->free_variable_rescaling, inv_obj,
+        state->free_dim);
+  }
+
+  int max_idx = 0;
+  CUBLAS_CHECK(cublasIdamax(state->blas_handle, state->free_dim,
+                            d_stationarity, 1, &max_idx));
+  double max_abs = 0.0;
+  if (max_idx > 0) {
+    CUDA_CHECK(cudaMemcpy(&max_abs, d_stationarity + max_idx - 1,
+                          sizeof(double), cudaMemcpyDeviceToHost));
+    max_abs = fabs(max_abs);
+  }
+  CUBLAS_CHECK(cublasSetPointerMode(state->blas_handle, saved_mode));
+  return max_abs;
 }
 
 static inline int
@@ -1012,6 +1082,14 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
         state->dual_product + state->lp_start_active_idx,
         state->low_rank_solution + state->lp_solution_offset, state->lp_dim);
   }
+  if (state->free_dim > 0) {
+    int blocks =
+        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    compute_free_gradient_kernel<<<blocks, THREADS_PER_BLOCK>>>(
+        state->low_rank_gradient + state->free_solution_offset,
+        state->free_objective_vector,
+        state->dual_product + state->free_start_active_idx, state->free_dim);
+  }
 
 #ifdef IS_DISTRIBUTED
   if (state->grid_context != NULL && state->grid_context->dims[0] > 1) {
@@ -1045,6 +1123,14 @@ static void COMPUTE_PRIMAL_RESIDUAL(cardal_sdp_solver_state_t *state) {
     compute_lp_primal_kernel<<<blocks, THREADS_PER_BLOCK>>>(
         state->primal_solution + state->lp_start_active_idx,
         state->low_rank_solution + state->lp_solution_offset, state->lp_dim);
+  }
+  if (state->free_dim > 0) {
+    int blocks =
+        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    compute_free_primal_kernel<<<blocks, THREADS_PER_BLOCK>>>(
+        state->primal_solution + state->free_start_active_idx,
+        state->low_rank_solution + state->free_solution_offset,
+        state->free_dim);
   }
 
   // A * primal_solution
@@ -1121,14 +1207,21 @@ static inline int CHECK_DUAL_INFEASIBILITY(cardal_sdp_solver_state_t *state) {
   }
 #endif
 
-  if (global_min_eigval < 0) {
-    state->absolute_dual_residual = fabs(global_min_eigval);
-    state->relative_dual_residual =
-        state->absolute_dual_residual / (1.0 + state->unscaled_objective_vector_norm);
-  } else {
-    state->absolute_dual_residual = 0.0;
-    state->relative_dual_residual = 0.0;
+  double free_stationarity = COMPUTE_FREE_STATIONARITY(state);
+#ifdef IS_DISTRIBUTED
+  if (state->grid_context != NULL && state->grid_context->dims[2] > 1) {
+    double global_free = free_stationarity;
+    MPI_Allreduce(&free_stationarity, &global_free, 1, MPI_DOUBLE, MPI_MAX,
+                  state->grid_context->comm_cone);
+    free_stationarity = global_free;
   }
+#endif
+  double cone_violation =
+      (global_min_eigval < 0.0) ? fabs(global_min_eigval) : 0.0;
+  state->absolute_dual_residual = fmax(cone_violation, free_stationarity);
+  state->relative_dual_residual =
+      state->absolute_dual_residual /
+      (1.0 + state->unscaled_objective_vector_norm);
 
   free(rank_incs);
   return total_neg_count;
@@ -1190,6 +1283,14 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
         state->blas_handle, state->lp_dim, state->lp_objective_vector, 1,
         state->primal_solution + state->lp_start_active_idx, 1, &lp_p_obj));
     p_obj += lp_p_obj;
+  }
+  if (state->free_dim > 0) {
+    double free_p_obj = 0.0;
+    CUBLAS_CHECK(cublasDdot(
+        state->blas_handle, state->free_dim, state->free_objective_vector, 1,
+        state->primal_solution + state->free_start_active_idx, 1,
+        &free_p_obj));
+    p_obj += free_p_obj;
   }
 
   CUBLAS_CHECK(cublasDdot(state->blas_handle, state->num_constraints,
@@ -1322,15 +1423,29 @@ CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(cardal_sdp_solver_state_t *state) {
       global_min_eigval = h_min_slack;
     }
   }
-  if (global_min_eigval < 0) {
-    state->absolute_dual_residual = fabs(global_min_eigval);
-    state->relative_dual_residual =
-        state->absolute_dual_residual /
-        (1.0 + state->unscaled_objective_vector_norm);
-  } else {
-    state->absolute_dual_residual = 0.0;
-    state->relative_dual_residual = 0.0;
+#ifdef IS_DISTRIBUTED
+  if (state->grid_context != NULL && state->grid_context->dims[2] > 1) {
+    double g_min = global_min_eigval;
+    MPI_Allreduce(&global_min_eigval, &g_min, 1, MPI_DOUBLE, MPI_MIN,
+                  state->grid_context->comm_cone);
+    global_min_eigval = g_min;
   }
+#endif
+  double free_stationarity = COMPUTE_FREE_STATIONARITY(state);
+#ifdef IS_DISTRIBUTED
+  if (state->grid_context != NULL && state->grid_context->dims[2] > 1) {
+    double global_free = free_stationarity;
+    MPI_Allreduce(&free_stationarity, &global_free, 1, MPI_DOUBLE, MPI_MAX,
+                  state->grid_context->comm_cone);
+    free_stationarity = global_free;
+  }
+#endif
+  double cone_violation =
+      (global_min_eigval < 0.0) ? fabs(global_min_eigval) : 0.0;
+  state->absolute_dual_residual = fmax(cone_violation, free_stationarity);
+  state->relative_dual_residual =
+      state->absolute_dual_residual /
+      (1.0 + state->unscaled_objective_vector_norm);
 
   int total_added = 0;
   if (total_neg_count > 0) {
@@ -1412,6 +1527,14 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
         state->d_step_scalars + 7));
   } else {
     CUDA_CHECK(cudaMemsetAsync(state->d_step_scalars + 7, 0, sizeof(double), 0));
+  }
+  if (state->free_dim > 0) {
+    int blocks =
+        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    compute_free_line_search_kernel<<<blocks, THREADS_PER_BLOCK>>>(
+        state->low_rank_direction + state->free_solution_offset,
+        state->primal_direct_solution_cross + state->free_start_active_idx,
+        state->free_dim);
   }
 
   double alpha_spmv = 1.0;

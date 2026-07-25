@@ -42,6 +42,106 @@ static double get_scalar(matvar_t *var, int index) {
   return read_typed_as_double(var->data, var->data_type, (size_t)index);
 }
 
+static size_t matvar_numel(const matvar_t *var) {
+  if (!var || !var->data || var->rank <= 0)
+    return 0;
+
+  size_t count = 1;
+  for (int i = 0; i < var->rank; i++)
+    count *= var->dims[i];
+  return count;
+}
+
+static bool matvar_contains_complex(const matvar_t *var) {
+  if (!var)
+    return false;
+  if (var->isComplex)
+    return true;
+  if (var->class_type != MAT_C_CELL || !var->data)
+    return false;
+
+  matvar_t **cells = (matvar_t **)var->data;
+  size_t count = matvar_numel(var);
+  for (size_t i = 0; i < count; i++) {
+    if (matvar_contains_complex(cells[i]))
+      return true;
+  }
+  return false;
+}
+
+static bool matvar_contains_nonzero(const matvar_t *var) {
+  if (!var || !var->data)
+    return false;
+  if (var->isComplex)
+    return true;
+
+  if (var->class_type == MAT_C_CELL) {
+    matvar_t **cells = (matvar_t **)var->data;
+    size_t count = matvar_numel(var);
+    for (size_t i = 0; i < count; i++) {
+      if (matvar_contains_nonzero(cells[i]))
+        return true;
+    }
+    return false;
+  }
+
+  if (var->class_type == MAT_C_SPARSE) {
+    mat_sparse_t *sparse = (mat_sparse_t *)var->data;
+    for (size_t i = 0; i < sparse->ndata; i++) {
+      if (read_typed_as_double(sparse->data, var->data_type, i) != 0.0)
+        return true;
+    }
+    return false;
+  }
+
+  switch (var->class_type) {
+  case MAT_C_DOUBLE:
+  case MAT_C_SINGLE:
+  case MAT_C_INT8:
+  case MAT_C_UINT8:
+  case MAT_C_INT16:
+  case MAT_C_UINT16:
+  case MAT_C_INT32:
+  case MAT_C_UINT32:
+  case MAT_C_INT64:
+  case MAT_C_UINT64:
+    break;
+  default:
+    return false;
+  }
+
+  size_t count = matvar_numel(var);
+  for (size_t i = 0; i < count; i++) {
+    if (read_typed_as_double(var->data, var->data_type, i) != 0.0)
+      return true;
+  }
+  return false;
+}
+
+static bool mat_cell_columns_nonempty(const matvar_t *var,
+                                      size_t first_column) {
+  if (!var || var->class_type != MAT_C_CELL || !var->data || var->rank < 2 ||
+      var->dims[1] <= first_column)
+    return false;
+
+  matvar_t **cells = (matvar_t **)var->data;
+  size_t rows = var->dims[0];
+  for (size_t col = first_column; col < var->dims[1]; col++) {
+    for (size_t row = 0; row < rows; row++) {
+      if (matvar_numel(cells[row + col * rows]) > 0)
+        return true;
+    }
+  }
+  return false;
+}
+
+static void free_matvars(matvar_t *const *vars, size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    if (vars[i])
+      Mat_VarFree(vars[i]);
+  }
+}
+
 static void map_sedumi_var(int var_idx, int K_f, int K_l, int K_q_dim,
                            int n_cones, const int *blk_dims, var_type_t *type,
                            int *local_idx, int *blk_idx, int *row, int *col) {
@@ -94,6 +194,8 @@ static inline void process_c_elem(int var_idx, double val, int K_f, int K_l,
 
   if (vtype == VAR_LP) {
     sdp->lp_objective[local_idx] = -val;
+  } else if (vtype == VAR_FREE) {
+    sdp->free_objective[local_idx] = -val;
   } else if (vtype == VAR_SDP) {
     if (r >= c) {
       sdp->psd_cone_objective->cone_ind[*o_count] = blk;
@@ -132,26 +234,56 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
   matvar_t *K_f_var = Mat_VarGetStructFieldByName(K_var, "f", 0);
   matvar_t *K_l_var = Mat_VarGetStructFieldByName(K_var, "l", 0);
   matvar_t *K_q_var = Mat_VarGetStructFieldByName(K_var, "q", 0);
+  matvar_t *K_r_var = Mat_VarGetStructFieldByName(K_var, "r", 0);
   matvar_t *K_s_var = Mat_VarGetStructFieldByName(K_var, "s", 0);
+  matvar_t *K_xcomplex_var =
+      Mat_VarGetStructFieldByName(K_var, "xcomplex", 0);
+  matvar_t *K_scomplex_var =
+      Mat_VarGetStructFieldByName(K_var, "scomplex", 0);
+  matvar_t *K_ycomplex_var =
+      Mat_VarGetStructFieldByName(K_var, "ycomplex", 0);
 
   int K_f = (int)get_scalar(K_f_var, 0);
   int K_l = (int)get_scalar(K_l_var, 0);
 
   int K_q_dim = 0;
-  if (K_q_var && K_q_var->data) {
-    int num_socp = (int)(K_q_var->dims[0] * K_q_var->dims[1]);
-    for (int i = 0; i < num_socp; i++)
-      K_q_dim += (int)get_scalar(K_q_var, i);
-    if (K_q_dim > 0)
-      LOG_DBG("[Warning] Ignoring %d SOCP constraints (K.q) - not supported by "
-             "basic_sdp_t!\n",
-             num_socp);
+  if (matvar_contains_nonzero(K_q_var)) {
+    fprintf(stderr,
+            "Error: Unsupported SeDuMi cone K.q (second-order cone). "
+            "Reformulate it as PSD data before using CARDAL.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {At_var, A_var, b_var, c_var, K_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
+    return NULL;
   }
-  if (K_f > 0)
-    LOG_DBG("[Warning] Ignoring %d Free variables (K.f) - not natively "
-           "supported!\n",
-           K_f);
 
+  if (matvar_contains_nonzero(K_r_var)) {
+    fprintf(stderr,
+            "Error: Unsupported SeDuMi cone K.r (rotated second-order cone). "
+            "Reformulate it as PSD data before using CARDAL.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {At_var, A_var, b_var, c_var, K_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
+    return NULL;
+  }
+
+  if (matvar_numel(K_xcomplex_var) > 0 ||
+      matvar_numel(K_scomplex_var) > 0 ||
+      matvar_numel(K_ycomplex_var) > 0 ||
+      matvar_contains_complex(At_var) || matvar_contains_complex(A_var) ||
+      matvar_contains_complex(b_var) || matvar_contains_complex(c_var)) {
+    fprintf(stderr,
+            "Error: Unsupported complex SeDuMi data "
+            "(K.xcomplex/K.scomplex/K.ycomplex or complex coefficients). "
+            "Convert it to a real SDP before using CARDAL.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {At_var, A_var, b_var, c_var, K_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
+    return NULL;
+  }
   int n_cones = 0;
   int *blk_dims = NULL;
   if (K_s_var && K_s_var->data) {
@@ -168,6 +300,7 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
   sdp->m = m;
   sdp->n_cones = n_cones;
   sdp->lp_dim = K_l;
+  sdp->free_dim = K_f;
   sdp->blk_dims = blk_dims;
 
   int max_At_nnz = 0;
@@ -197,6 +330,14 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
   sdp->lp_constraints->row_ind = (int *)safe_malloc(max_At_nnz * sizeof(int));
   sdp->lp_constraints->col_ind = (int *)safe_malloc(max_At_nnz * sizeof(int));
   sdp->lp_constraints->val = (double *)safe_malloc(max_At_nnz * sizeof(double));
+  sdp->free_constraints =
+      (free_constraint_t *)calloc(1, sizeof(free_constraint_t));
+  sdp->free_constraints->row_ind =
+      (int *)safe_malloc(max_At_nnz * sizeof(int));
+  sdp->free_constraints->col_ind =
+      (int *)safe_malloc(max_At_nnz * sizeof(int));
+  sdp->free_constraints->val =
+      (double *)safe_malloc(max_At_nnz * sizeof(double));
 
   sdp->psd_cone_objective =
       (psd_cone_objective_t *)calloc(1, sizeof(psd_cone_objective_t));
@@ -210,6 +351,8 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
       (double *)safe_malloc(max_c_nnz * sizeof(double));
 
   sdp->lp_objective = (double *)calloc((K_l > 0 ? K_l : 1), sizeof(double));
+  sdp->free_objective =
+      (double *)calloc((K_f > 0 ? K_f : 1), sizeof(double));
   sdp->right_hand_side = (double *)calloc(m, sizeof(double));
 
   if (b_var->class_type == MAT_C_SPARSE) {
@@ -245,7 +388,7 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
     }
   }
 
-  int c_count = 0, lp_c_count = 0;
+  int c_count = 0, lp_c_count = 0, free_c_count = 0;
 
   if (At_var && At_var->class_type == MAT_C_SPARSE) {
     mat_sparse_t *At_sp = (mat_sparse_t *)At_var->data;
@@ -266,6 +409,11 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
           sdp->lp_constraints->col_ind[lp_c_count] = local_idx;
           sdp->lp_constraints->val[lp_c_count] = v;
           lp_c_count++;
+        } else if (vtype == VAR_FREE) {
+          sdp->free_constraints->row_ind[free_c_count] = j;
+          sdp->free_constraints->col_ind[free_c_count] = local_idx;
+          sdp->free_constraints->val[free_c_count] = v;
+          free_c_count++;
         } else if (vtype == VAR_SDP && r >= c) {
           sdp->psd_cone_constraints->constr_ind[c_count] = j;
           sdp->psd_cone_constraints->cone_ind[c_count] = blk;
@@ -296,6 +444,11 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
           sdp->lp_constraints->col_ind[lp_c_count] = local_idx;
           sdp->lp_constraints->val[lp_c_count] = v;
           lp_c_count++;
+        } else if (vtype == VAR_FREE) {
+          sdp->free_constraints->row_ind[free_c_count] = A_ir[k];
+          sdp->free_constraints->col_ind[free_c_count] = local_idx;
+          sdp->free_constraints->val[free_c_count] = v;
+          free_c_count++;
         } else if (vtype == VAR_SDP && r >= c) {
           sdp->psd_cone_constraints->constr_ind[c_count] = A_ir[k];
           sdp->psd_cone_constraints->cone_ind[c_count] = blk;
@@ -312,11 +465,14 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
   sdp->nnz_psd_obj = o_count;
   sdp->nnz_lp_constr = lp_c_count;
   sdp->nnz_lp_obj = K_l; // Objective is dense sized array
+  sdp->nnz_free_constr = free_c_count;
+  sdp->nnz_free_obj = K_f;
 
-  LOG_DBG("  -> SeDuMi parsed: m=%d, PSD cones=%d, LP dim=%d\n", sdp->m,
-         sdp->n_cones, sdp->lp_dim);
-  LOG_DBG("     PSD NNZ: A=%d, C=%d | LP NNZ: A=%d\n", sdp->nnz_psd_constr,
-         sdp->nnz_psd_obj, sdp->nnz_lp_constr);
+  LOG_DBG("  -> SeDuMi parsed: m=%d, PSD cones=%d, LP dim=%d, free dim=%d\n",
+          sdp->m, sdp->n_cones, sdp->lp_dim, sdp->free_dim);
+  LOG_DBG("     PSD NNZ: A=%d, C=%d | LP NNZ: A=%d | Free NNZ: A=%d\n",
+          sdp->nnz_psd_constr, sdp->nnz_psd_obj, sdp->nnz_lp_constr,
+          sdp->nnz_free_constr);
 
   if (!root_struct) {
     if (At_var)
@@ -332,27 +488,89 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
 }
 
 static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
-  matvar_t *blk_var = NULL, *At_var = NULL, *C_var = NULL, *b_var = NULL;
+  matvar_t *blk_var = NULL, *At_var = NULL, *C_var = NULL, *b_var = NULL,
+           *options_var = NULL;
 
   if (root_struct) {
     blk_var = Mat_VarGetStructFieldByName(root_struct, "blk", 0);
     At_var = Mat_VarGetStructFieldByName(root_struct, "At", 0);
     C_var = Mat_VarGetStructFieldByName(root_struct, "C", 0);
     b_var = Mat_VarGetStructFieldByName(root_struct, "b", 0);
+    options_var = Mat_VarGetStructFieldByName(root_struct, "OPTIONS", 0);
   } else {
     blk_var = Mat_VarRead(matfp, "blk");
     At_var = Mat_VarRead(matfp, "At");
     C_var = Mat_VarRead(matfp, "C");
     b_var = Mat_VarRead(matfp, "b");
+    options_var = Mat_VarRead(matfp, "OPTIONS");
   }
 
   if (!blk_var || !At_var || !C_var || !b_var ||
-      blk_var->class_type != MAT_C_CELL) {
+      blk_var->class_type != MAT_C_CELL ||
+      At_var->class_type != MAT_C_CELL || C_var->class_type != MAT_C_CELL ||
+      blk_var->rank < 2 || blk_var->dims[1] < 2) {
     fprintf(stderr, "Fatal Error: Invalid SDPT3 format.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
     return NULL;
   }
 
   int K_blocks = blk_var->dims[0];
+  if (At_var->rank < 2 || C_var->rank < 2 ||
+      At_var->dims[0] < (size_t)K_blocks ||
+      C_var->dims[0] < (size_t)K_blocks) {
+    fprintf(stderr,
+            "Fatal Error: Invalid SDPT3 format. blk, At, and C block counts "
+            "do not match.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
+    return NULL;
+  }
+
+  if (matvar_contains_complex(At_var) || matvar_contains_complex(C_var) ||
+      matvar_contains_complex(b_var)) {
+    fprintf(stderr,
+            "Error: Unsupported complex SDPT3 data. Convert it to a real SDP "
+            "before using CARDAL.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
+    return NULL;
+  }
+
+  if (mat_cell_columns_nonempty(blk_var, 2) ||
+      mat_cell_columns_nonempty(At_var, 1)) {
+    fprintf(stderr,
+            "Error: Unsupported SDPT3 low-rank constraint encoding "
+            "(blk{p,3}/At{p,2:3}). Expand it into ordinary At matrices "
+            "before using CARDAL.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
+    return NULL;
+  }
+
+  matvar_t *parbarrier_var = NULL;
+  if (options_var && options_var->class_type == MAT_C_STRUCT)
+    parbarrier_var =
+        Mat_VarGetStructFieldByName(options_var, "parbarrier", 0);
+  if (matvar_contains_nonzero(parbarrier_var)) {
+    fprintf(stderr,
+            "Error: Unsupported SDPT3 OPTIONS.parbarrier objective. CARDAL "
+            "requires a linear objective.\n");
+    if (!root_struct) {
+      matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+      free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+    }
+    return NULL;
+  }
+
   matvar_t **blk_cells = (matvar_t **)blk_var->data;
   matvar_t **At_cells = (matvar_t **)At_var->data;
   matvar_t **C_cells = (matvar_t **)C_var->data;
@@ -361,18 +579,55 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
       (int)(b_var->dims[0] > b_var->dims[1] ? b_var->dims[0] : b_var->dims[1]);
   int total_n_cones = 0;
   int total_lp_dim = 0;
+  int total_free_dim = 0;
 
   for (int p = 0; p < K_blocks; p++) {
     matvar_t *type_cell = blk_cells[p];
     matvar_t *size_cell = blk_cells[p + K_blocks];
+    if (!type_cell || !type_cell->data || !size_cell || !size_cell->data) {
+      fprintf(stderr,
+              "Fatal Error: Invalid SDPT3 block description at block %d.\n",
+              p + 1);
+      if (!root_struct) {
+        matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+        free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+      }
+      return NULL;
+    }
     char *blk_type = (char *)type_cell->data;
     int num_sub_blocks = size_cell->nbytes / size_cell->data_size;
+
+    if (blk_type[0] == 'q' || blk_type[0] == 'r') {
+      fprintf(stderr,
+              "Error: Unsupported SDPT3 '%c' block at block %d. Reformulate "
+              "second-order cones as PSD data before using CARDAL.\n",
+              blk_type[0], p + 1);
+      if (!root_struct) {
+        matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+        free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+      }
+      return NULL;
+    }
+    if (blk_type[0] != 's' && blk_type[0] != 'l' && blk_type[0] != 'u') {
+      fprintf(stderr,
+              "Error: Unsupported SDPT3 block type '%c' at block %d. CARDAL "
+              "supports only 's', 'l', and 'u' blocks.\n",
+              blk_type[0], p + 1);
+      if (!root_struct) {
+        matvar_t *vars[] = {blk_var, At_var, C_var, b_var, options_var};
+        free_matvars(vars, sizeof(vars) / sizeof(vars[0]));
+      }
+      return NULL;
+    }
 
     if (blk_type[0] == 's')
       total_n_cones += num_sub_blocks;
     else if (blk_type[0] == 'l') {
       for (int i = 0; i < num_sub_blocks; i++)
         total_lp_dim += (int)get_scalar(size_cell, i);
+    } else if (blk_type[0] == 'u') {
+      for (int i = 0; i < num_sub_blocks; i++)
+        total_free_dim += (int)get_scalar(size_cell, i);
     }
   }
 
@@ -380,6 +635,7 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
   sdp->m = m;
   sdp->n_cones = total_n_cones;
   sdp->lp_dim = total_lp_dim;
+  sdp->free_dim = total_free_dim;
   sdp->blk_dims = (int *)safe_malloc(total_n_cones * sizeof(int));
   sdp->right_hand_side = (double *)calloc(m, sizeof(double));
 
@@ -396,6 +652,8 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
 
   sdp->lp_objective =
       (double *)calloc((total_lp_dim > 0 ? total_lp_dim : 1), sizeof(double));
+  sdp->free_objective = (double *)calloc(
+      (total_free_dim > 0 ? total_free_dim : 1), sizeof(double));
 
   int max_At_nnz = 0, max_C_nnz = 0;
   for (int p = 0; p < K_blocks; p++) {
@@ -431,6 +689,14 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
   sdp->lp_constraints->row_ind = (int *)safe_malloc(max_At_nnz * sizeof(int));
   sdp->lp_constraints->col_ind = (int *)safe_malloc(max_At_nnz * sizeof(int));
   sdp->lp_constraints->val = (double *)safe_malloc(max_At_nnz * sizeof(double));
+  sdp->free_constraints =
+      (free_constraint_t *)calloc(1, sizeof(free_constraint_t));
+  sdp->free_constraints->row_ind =
+      (int *)safe_malloc(max_At_nnz * sizeof(int));
+  sdp->free_constraints->col_ind =
+      (int *)safe_malloc(max_At_nnz * sizeof(int));
+  sdp->free_constraints->val =
+      (double *)safe_malloc(max_At_nnz * sizeof(double));
 
   sdp->psd_cone_objective =
       (psd_cone_objective_t *)calloc(1, sizeof(psd_cone_objective_t));
@@ -443,8 +709,8 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
   sdp->psd_cone_objective->val =
       (double *)safe_malloc(max_C_nnz * sizeof(double));
 
-  int current_cone_idx = 0, current_lp_offset = 0;
-  int c_count = 0, o_count = 0, lp_c_count = 0;
+  int current_cone_idx = 0, current_lp_offset = 0, current_free_offset = 0;
+  int c_count = 0, o_count = 0, lp_c_count = 0, free_c_count = 0;
 
   for (int p = 0; p < K_blocks; p++) {
     matvar_t *type_cell = blk_cells[p], *size_cell = blk_cells[p + K_blocks];
@@ -452,20 +718,27 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
     int num_sub_blocks = size_cell->nbytes / size_cell->data_size;
     matvar_t *Cp = C_cells[p], *Atp = At_cells[p];
 
-    if (blk_type[0] == 'l') {
-      int lp_size = 0;
+    if (blk_type[0] == 'l' || blk_type[0] == 'u') {
+      int is_free = blk_type[0] == 'u';
+      int linear_size = 0;
       for (int i = 0; i < num_sub_blocks; i++)
-        lp_size += (int)get_scalar(size_cell, i);
+        linear_size += (int)get_scalar(size_cell, i);
+      int linear_offset = is_free ? current_free_offset : current_lp_offset;
+      double *linear_objective =
+          is_free ? sdp->free_objective : sdp->lp_objective;
+      free_constraint_t *linear_constraints =
+          is_free ? sdp->free_constraints : sdp->lp_constraints;
+      int *linear_count = is_free ? &free_c_count : &lp_c_count;
 
       if (Cp->class_type == MAT_C_SPARSE) {
         mat_sparse_t *sp = (mat_sparse_t *)Cp->data;
         for (int i = 0; i < (int)sp->ndata; i++)
-          sdp->lp_objective[current_lp_offset + ((int *)sp->ir)[i]] =
+          linear_objective[linear_offset + ((int *)sp->ir)[i]] =
               -read_typed_as_double(sp->data, Cp->data_type, i);
       } else if (Cp->class_type == MAT_C_DOUBLE ||
                  Cp->class_type == MAT_C_SINGLE) {
-        for (int i = 0; i < lp_size; i++)
-          sdp->lp_objective[current_lp_offset + i] =
+        for (int i = 0; i < linear_size; i++)
+          linear_objective[linear_offset + i] =
               -read_typed_as_double(Cp->data, Cp->data_type, i);
       }
 
@@ -475,12 +748,12 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
         enum matio_types t = Atp->data_type;
         for (int j = 0; j < m; j++) {
           for (int k = jc[j]; k < jc[j + 1]; k++) {
-            sdp->lp_constraints->row_ind[lp_c_count] = j;
-            sdp->lp_constraints->col_ind[lp_c_count] =
-                current_lp_offset + ir[k];
-            sdp->lp_constraints->val[lp_c_count] =
+            linear_constraints->row_ind[*linear_count] = j;
+            linear_constraints->col_ind[*linear_count] =
+                linear_offset + ir[k];
+            linear_constraints->val[*linear_count] =
                 read_typed_as_double(sp->data, t, k);
-            lp_c_count++;
+            (*linear_count)++;
           }
         }
       } else if (Atp->class_type == MAT_C_DOUBLE ||
@@ -492,16 +765,19 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
             double v = read_typed_as_double(Atp->data, t,
                                             (size_t)j * rows + row_idx);
             if (v != 0.0) {
-              sdp->lp_constraints->row_ind[lp_c_count] = j;
-              sdp->lp_constraints->col_ind[lp_c_count] =
-                  current_lp_offset + row_idx;
-              sdp->lp_constraints->val[lp_c_count] = v;
-              lp_c_count++;
+              linear_constraints->row_ind[*linear_count] = j;
+              linear_constraints->col_ind[*linear_count] =
+                  linear_offset + row_idx;
+              linear_constraints->val[*linear_count] = v;
+              (*linear_count)++;
             }
           }
         }
       }
-      current_lp_offset += lp_size;
+      if (is_free)
+        current_free_offset += linear_size;
+      else
+        current_lp_offset += linear_size;
 
     } else if (blk_type[0] == 's') {
       int *sub_dims = (int *)safe_malloc(num_sub_blocks * sizeof(int));
@@ -658,11 +934,14 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
   sdp->nnz_psd_obj = o_count;
   sdp->nnz_lp_constr = lp_c_count;
   sdp->nnz_lp_obj = total_lp_dim;
+  sdp->nnz_free_constr = free_c_count;
+  sdp->nnz_free_obj = total_free_dim;
 
-  LOG_DBG("  -> SDPT3 parsed: m=%d, PSD cones=%d, LP dim=%d\n", sdp->m,
-         sdp->n_cones, sdp->lp_dim);
-  LOG_DBG("     PSD NNZ: A=%d, C=%d | LP NNZ: A=%d\n", sdp->nnz_psd_constr,
-         sdp->nnz_psd_obj, sdp->nnz_lp_constr);
+  LOG_DBG("  -> SDPT3 parsed: m=%d, PSD cones=%d, LP dim=%d, free dim=%d\n",
+          sdp->m, sdp->n_cones, sdp->lp_dim, sdp->free_dim);
+  LOG_DBG("     PSD NNZ: A=%d, C=%d | LP NNZ: A=%d | Free NNZ: A=%d\n",
+          sdp->nnz_psd_constr, sdp->nnz_psd_obj, sdp->nnz_lp_constr,
+          sdp->nnz_free_constr);
 
   if (!root_struct) {
     if (blk_var)
@@ -673,6 +952,8 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
       Mat_VarFree(C_var);
     if (b_var)
       Mat_VarFree(b_var);
+    if (options_var)
+      Mat_VarFree(options_var);
   }
   return sdp;
 }

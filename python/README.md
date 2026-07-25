@@ -113,7 +113,8 @@ result = m.solve(eps_optimal_relative=1e-6, verbose=0)
 assert abs(result.primal_objective - 1.0) < 1e-3
 
 # Post-solve metadata
-print(m.num_cones, m.num_constraints, m.num_variables, m.block_dims, m.lp_dim)
+print(m.num_cones, m.num_constraints, m.num_variables,
+      m.block_dims, m.lp_dim, m.free_dim)
 ```
 
 Matrices may be dense (`numpy.ndarray`) or any `scipy.sparse` matrix (CSR, CSC, and COO are all accepted). Each is assumed symmetric, and **only the lower triangle is read**: entries with `row < col` are ignored, and off-diagonals are **not** implicitly doubled. `A[i][k]` may be `None` to mean "constraint *i* touches nothing in cone *k*".
@@ -157,6 +158,26 @@ m.set_problem(
 )
 ```
 
+### Unrestricted variables
+
+Native unrestricted variables are declared with `free_dim`, `free_obj`, and
+`A_free`. They are stored directly and are not split into positive and
+negative parts:
+
+```python
+m.set_problem(
+    block_dims=[],
+    C=[],
+    A=[[], []],
+    b=[2.0, -1.0],
+    free_dim=2,
+    free_obj=np.array([1.0, -2.0]),
+    A_free=np.array([[2.0, 0.0], [0.0, 0.5]]),
+)
+result = m.solve(verbose=0)
+print(result.free_primal)  # [1.0, -2.0]
+```
+
 ### From raw COO triplets
 
 For very large problems it is often faster to skip the matrix layer entirely. `set_problem_coo` is a 1:1 mirror of the C ABI:
@@ -179,16 +200,22 @@ m.set_problem_coo(
 )
 ```
 
-The COO path uses the same lower-triangle-only convention; LP-block triplets go through `A_lp=(constr_ind, col_ind, val)` alongside `lp_dim` and `lp_obj`.
+The COO path uses the same lower-triangle-only convention. LP and free-block
+triplets use `A_lp=(constr_ind, col_ind, val)` and
+`A_free=(constr_ind, col_ind, val)`, respectively.
 
-## Cone Constraints
+## Variable Domains
 
-CARDAL supports two cone kinds, both provided implicitly through `block_dims` and `lp_dim` rather than a separate cone-descriptor argument:
+CARDAL supports three native variable domains:
 
 - **PSD cones.** Each entry of `block_dims` is the side length $n_c$ of a symmetric block $X_c \succeq 0$. Stored as Burer-Monteiro factors $V_c \in \mathbb{R}^{n_c \times r_c}$.
 - **Nonnegative LP tail.** A single nonnegative block $x_{\mathrm{LP}} \in \mathbb{R}^{d_{\mathrm{LP}}}$ is appended after the PSD blocks, where $d_{\mathrm{LP}}$ is specified by `lp_dim`. Set `lp_dim=0` (default) for pure SDPs.
+- **Unrestricted real block.** A free vector
+  $x_{\mathrm{free}}\in\mathbb{R}^{d_{\mathrm{free}}}$ is declared by
+  `free_dim`. It is represented directly, without positive/negative splitting.
 
-Second-order cones, exponential cones, and generic bounded cones are **not** supported. Nonnegative LP variables are the only non-PSD cone.
+Second-order cones, exponential cones, and generic bounded cones are **not**
+supported.
 
 ## `cardal.Model`
 
@@ -208,8 +235,9 @@ Read-only properties (each raises `RuntimeError` before a problem is loaded):
 |:---------------------|:-------------------------------------------------------------------|
 | `m.num_cones`        | Number of PSD blocks $p$.                                          |
 | `m.num_constraints`  | Number of equality constraints $m$.                                |
-| `m.num_variables`    | Total variable count (sum of triangular block sizes + LP block).   |
+| `m.num_variables`    | Total active variable count across all blocks.                     |
 | `m.lp_dim`           | Size of the nonnegative LP tail (`0` for pure SDP).                |
+| `m.free_dim`         | Size of the unrestricted real block.                              |
 | `m.block_dims`       | Per-cone side lengths $[n_1,\dots,n_p]$, as a fresh list.          |
 
 `repr(m)` yields `"<cardal.Model (empty)>"` before load and `"<cardal.Model num_cones=... num_constraints=... block_dims=...>"` afterwards. **No silent typos.** Unlike Gurobi, `solve()` does not accept unknown keyword arguments; any typo raises `TypeError("unknown parameter '<name>'")`. Cross-check current parameters against `cardal.Model.default_params().keys()`.
@@ -274,10 +302,14 @@ print(defaults["eps_optimal_relative"])             # its default value
 | `num_constraints`      | `int`               | Number of equality constraints.                                          |
 | `total_rank`           | `int`               | Sum of per-cone BM ranks at termination.                                 |
 | `primal_factor`        | `numpy.ndarray`     | Flattened Burer-Monteiro factor $V$, length $\sum_c d_c r_c$.            |
+| `lp_primal`            | `numpy.ndarray`     | Nonnegative LP primal variables, length `m.lp_dim`.                       |
+| `free_primal`          | `numpy.ndarray`     | Unrestricted primal variables, length `m.free_dim`.                      |
 | `dual`                 | `numpy.ndarray`     | Dual multipliers $y$, length `num_constraints`.                          |
 | `rank_list`            | `numpy.ndarray`     | Per-cone final BM rank, length `num_cones`.                              |
 
-The three NumPy arrays are **zero-copy read-only views** over C-side buffers; the underlying storage lives as long as the `Result` object (a private `_handle` field pins it). `repr(result)` gives a one-line status; `result.summary()` returns a formatted multi-line report &mdash; the same shape the CLI writes into `<instance>_summary.txt` under `-O`.
+The NumPy arrays are **zero-copy read-only views** over C-side buffers; the
+underlying storage lives as long as the `Result` object (a private `_handle`
+field pins it).
 
 `TerminationReason` is an `IntEnum` whose members are also re-exported at module scope:
 

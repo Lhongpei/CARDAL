@@ -10,14 +10,23 @@ The CARDAL paper is available on arXiv: [A Curvature-Aware Rank-Adaptive Distrib
 
 ### Problem Formulation
 
-CARDAL solves standard-form semidefinite programs with block-diagonal PSD variables and an optional nonnegative LP block:
+CARDAL solves standard-form semidefinite programs with block-diagonal PSD
+variables, an optional nonnegative LP block, and optional unrestricted real
+variables:
 
 $$
 \begin{aligned}
-\min_{X} \quad & \langle C, X \rangle \\
-\text{s.t.} \quad & \langle A_i, X \rangle = b_i, \quad i = 1,\dots,m, \\
-                  & X = \mathrm{blkdiag}(X_1, \dots, X_p, x_{\text{LP}}), \\
-                  & X_c \succeq 0 \text{ for } c=1,\dots,p, \qquad x_{\text{LP}} \ge 0.
+\min \quad &
+  \sum_{c=1}^p \langle C_c, X_c\rangle
+  + c_{\mathrm{LP}}^\top x_{\mathrm{LP}}
+  + c_{\mathrm{free}}^\top x_{\mathrm{free}} \\
+\text{s.t.} \quad &
+  \sum_{c=1}^p \langle A_{i,c},X_c\rangle
+  + a_{i,\mathrm{LP}}^\top x_{\mathrm{LP}}
+  + a_{i,\mathrm{free}}^\top x_{\mathrm{free}} = b_i,
+  \quad i=1,\dots,m,\\
+& X_c \succeq 0,\quad x_{\mathrm{LP}}\ge 0,\quad
+  x_{\mathrm{free}}\in\mathbb{R}^{d_{\mathrm{free}}}.
 \end{aligned}
 $$
 
@@ -74,7 +83,7 @@ CARDAL auto-detects SDPA, MATLAB, and PDSDP input formats:
 
 The solve summary is printed to the terminal. Passing `-O ./output` also
 writes the summary, low-rank primal factor, per-cone rank list, and dual
-solution to `./output`.
+solution to `./output`. LP and free primal vectors are included when present.
 
 ### CLI
 
@@ -127,7 +136,7 @@ print(result.status, result.primal_objective, result.rel_objective_gap)
 | `-L, --lbfgs-hist` | int | L-BFGS history size. | `5` |
 | `-T, --time-limit` | float | Wall-clock limit in seconds; `0` disables it. | `3600` |
 | `-v, --verbose` | int | Log level: `0` silent, `1` summary, `2` iterations, `3` debug. | `2` |
-| `-O, --output-dir` | path | Write the summary, primal factor, rank list, and dual solution. | None |
+| `-O, --output-dir` | path | Write the summary and primal/dual solution files. | None |
 
 #### Distributed and scaling parameters
 

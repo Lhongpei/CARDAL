@@ -158,6 +158,8 @@ cardal_problem *cardal_read_sdpa(const char *path, cardal_error *err_out);
  *   `a_val`  are the entries of the constraint matrices A_i (constraint i
  *            is <A_i, X> = b_i).
  *   `lp_obj` is the cost vector on the LP block: min <lp_obj, x_LP>.
+ *   `free_obj` is the cost vector on the unrestricted block:
+ *              min <free_obj, x_free>.
  *
  * PSD triangle convention:
  *   Provide only one triangle per block (typically lower: row >= col).
@@ -172,8 +174,9 @@ cardal_problem *cardal_read_sdpa(const char *path, cardal_error *err_out);
 typedef struct {
   /* Sizes */
   int  num_constraints;   /* m — length of b */
-  int  num_cones;         /* p — length of blk_dims (0 allowed for pure LP) */
-  int  lp_dim;            /* 0 for pure SDP */
+  int  num_cones;         /* p — length of blk_dims (0 allowed) */
+  int  lp_dim;            /* nonnegative variables */
+  int  free_dim;          /* unrestricted real variables */
   const int    *blk_dims; /* length num_cones */
 
   /* Objective C — sparse COO over (cone, row, col, val) */
@@ -200,6 +203,13 @@ typedef struct {
   const int    *lp_col_ind;    /* length nnz_lp, in [0, lp_dim) */
   const double *lp_val;        /* length nnz_lp */
 
+  /* Free-variable objective and constraints */
+  const double *free_obj;       /* length free_dim, NULL iff free_dim == 0 */
+  int           nnz_free;
+  const int    *free_constr_ind; /* length nnz_free */
+  const int    *free_col_ind;    /* length nnz_free, in [0, free_dim) */
+  const double *free_val;        /* length nnz_free */
+
   /* RHS */
   const double *b;            /* length num_constraints */
 } cardal_problem_data;
@@ -212,6 +222,7 @@ int cardal_problem_num_constraints(const cardal_problem *p);
 int cardal_problem_num_cones(const cardal_problem *p);
 int cardal_problem_num_variables(const cardal_problem *p);
 int cardal_problem_lp_dim(const cardal_problem *p);
+int cardal_problem_free_dim(const cardal_problem *p);
 
 /* Copy per-cone dimensions into `out_dims` (size >= cardal_problem_num_cones).
  * Returns CARDAL_OK on success. */
@@ -258,6 +269,14 @@ int    cardal_result_total_rank(const cardal_result *r);
  * cone). Length written to *out_length; returns NULL if unavailable. */
 const double *cardal_result_primal_factor(const cardal_result *r,
                                           int *out_length);
+
+/* Nonnegative LP primal variables (length = problem lp_dim). */
+const double *cardal_result_lp_primal(const cardal_result *r,
+                                      int *out_length);
+
+/* Unrestricted primal variables (length = problem free_dim). */
+const double *cardal_result_free_primal(const cardal_result *r,
+                                        int *out_length);
 
 /* Dual solution y (length = num_constraints). */
 const double *cardal_result_dual(const cardal_result *r,

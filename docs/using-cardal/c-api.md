@@ -54,6 +54,7 @@ cardal_problem_data data = {0};
 data.num_constraints = m;
 data.num_cones = p;
 data.lp_dim = lp_dim;
+data.free_dim = free_dim;
 data.blk_dims = block_dims;
 
 data.nnz_c = nnz_c;
@@ -74,6 +75,12 @@ data.nnz_lp = nnz_lp;
 data.lp_constr_ind = lp_constraint;
 data.lp_col_ind = lp_col;
 data.lp_val = lp_val;
+
+data.free_obj = free_obj;
+data.nnz_free = nnz_free;
+data.free_constr_ind = free_constraint;
+data.free_col_ind = free_col;
+data.free_val = free_val;
 data.b = b;
 
 cardal_error error = CARDAL_OK;
@@ -81,7 +88,8 @@ cardal_problem *problem = cardal_build_problem(&data, &error);
 ```
 
 All coordinate indices are zero-based. PSD coordinates contain one triangle
-per symmetric block, normally `row >= col`. CARDAL copies all supplied arrays;
+per symmetric block, normally `row >= col`. LP and free constraint entries use
+`(constraint, column, value)` COO arrays. CARDAL copies all supplied arrays;
 the caller may release them after `cardal_build_problem` returns.
 
 ## Problem functions
@@ -94,6 +102,7 @@ the caller may release them after `cardal_build_problem` returns.
 | `cardal_problem_num_cones` | Return the number of PSD blocks |
 | `cardal_problem_num_variables` | Return the stored variable count |
 | `cardal_problem_lp_dim` | Return the nonnegative LP dimension |
+| `cardal_problem_free_dim` | Return the unrestricted real dimension |
 | `cardal_problem_get_block_dims` | Copy PSD block dimensions |
 | `cardal_problem_free` | Release a problem handle |
 
@@ -112,6 +121,8 @@ remain valid until `cardal_result_free`:
 | `cardal_result_rel_*` | Relative primal residual, dual residual, and gap |
 | `cardal_result_*iters` | Outer and total inner iterations |
 | `cardal_result_primal_factor` | Flattened low-rank factors |
+| `cardal_result_lp_primal` | Nonnegative LP primal vector |
+| `cardal_result_free_primal` | Unrestricted primal vector |
 | `cardal_result_dual` | Dual vector |
 | `cardal_result_rank_list` | Final rank of each PSD block |
 
@@ -136,4 +147,3 @@ int pending = cardal_cancel_requested();
 
 The [Parameters](../parameters.md) page documents `cardal_params` and its CLI
 and Python equivalents.
-

@@ -168,6 +168,7 @@ void print_problem_statistics_section(const compressed_sdp_problem_t *prob,
   print_kv_int("Constraints (m)", prob->num_constraints);
   print_kv_int("Active variables", prob->n_active_vars);
   print_kv_int("LP variables", prob->lp_dim);
+  print_kv_int("Free variables", prob->free_dim);
   print_kv_int("PSD cones", prob->n_blks);
   if (prob->constraint_matrix != NULL)
     print_kv_int("Constraint NNZ", prob->constraint_matrix->num_nonzeros);
@@ -332,6 +333,8 @@ void free_compressed_sdp(compressed_sdp_problem_t *prob) {
     free(prob->right_hand_side);
   if (prob->lp_objective_vector)
     free(prob->lp_objective_vector);
+  if (prob->free_objective_vector)
+    free(prob->free_objective_vector);
 
   if (prob->constraint_matrix) {
     if (prob->constraint_matrix->row_ptr)
@@ -399,6 +402,7 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
   prob->num_constraints = input->m;
   prob->n_blks = input->n_cones;
   prob->lp_dim = input->lp_dim;
+  prob->free_dim = input->free_dim;
 
   prob->blk_dims = (int *)safe_malloc(input->n_cones * sizeof(int));
   prob->blk_ptr =
@@ -453,7 +457,8 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
   }
 
   prob->lp_start_idx = unique_count;
-  prob->n_active_vars = unique_count + prob->lp_dim;
+  prob->free_start_idx = unique_count + prob->lp_dim;
+  prob->n_active_vars = unique_count + prob->lp_dim + prob->free_dim;
 
   prob->col_mapping =
       (long long *)safe_malloc(prob->n_active_vars * sizeof(long long));
@@ -465,6 +470,10 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
   for (int i = 0; i < prob->lp_dim; i++) {
     prob->col_mapping[prob->lp_start_idx + i] = prob->total_n_orig + i;
   }
+  for (int i = 0; i < prob->free_dim; i++) {
+    prob->col_mapping[prob->free_start_idx + i] =
+        prob->total_n_orig + prob->lp_dim + i;
+  }
   free(temp_col_mapping);
 
   // PASS 2: build structures via direct lookup.
@@ -475,7 +484,8 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
   // the running counter; the per-rank counts (after partition_problem) are
   // partitioned by row count P_row >= 1 and stay safely under INT_MAX.
   size_t nnz_A_est = (size_t)2 * (size_t)input->nnz_psd_constr +
-                     (size_t)input->nnz_lp_constr;
+                     (size_t)input->nnz_lp_constr +
+                     (size_t)input->nnz_free_constr;
   coo_triplet_t *temp_A =
       (coo_triplet_t *)safe_malloc(nnz_A_est * sizeof(coo_triplet_t));
   size_t actual_nnz_A = 0;
@@ -522,6 +532,19 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
     double val = input->lp_constraints->val[k];
 
     int compact_idx = prob->lp_start_idx + lp_var_idx;
+
+    temp_A[actual_nnz_A].row = constr_id;
+    temp_A[actual_nnz_A].col = compact_idx;
+    temp_A[actual_nnz_A].val = val;
+    actual_nnz_A++;
+  }
+
+  for (int k = 0; k < input->nnz_free_constr; k++) {
+    int constr_id = input->free_constraints->row_ind[k];
+    int free_var_idx = input->free_constraints->col_ind[k];
+    double val = input->free_constraints->val[k];
+
+    int compact_idx = prob->free_start_idx + free_var_idx;
 
     temp_A[actual_nnz_A].row = constr_id;
     temp_A[actual_nnz_A].col = compact_idx;
@@ -630,6 +653,13 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
            prob->lp_dim * sizeof(double));
   }
 
+  prob->free_objective_vector = (double *)calloc(
+      (prob->free_dim > 0 ? prob->free_dim : 1), sizeof(double));
+  if (input->free_objective && prob->free_dim > 0) {
+    memcpy(prob->free_objective_vector, input->free_objective,
+           prob->free_dim * sizeof(double));
+  }
+
   // --- Dense Allocations (RHS) ---
   prob->right_hand_side =
       (double *)calloc(prob->num_constraints, sizeof(double));
@@ -713,6 +743,7 @@ compute_initial_penalty_coef(const compressed_sdp_problem_t *sdp_problem) {
     sum_dims += (double)sdp_problem->blk_dims[i];
   }
   sum_dims += (double)sdp_problem->lp_dim;
+  sum_dims += (double)sdp_problem->free_dim;
   if (sum_dims <= 0.0) {
     return 1.0;
   }

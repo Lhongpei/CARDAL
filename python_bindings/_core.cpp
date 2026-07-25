@@ -228,7 +228,7 @@ PYBIND11_MODULE(_core, m) {
               "ergonomic API).";
 
     // ----- Version marker: bump on ABI-visible changes ------------------
-    m.attr("__abi_version__") = py::int_(3);
+    m.attr("__abi_version__") = py::int_(4);
 
     // ----- Status enum --------------------------------------------------
     py::enum_<cardal_status>(m, "Status")
@@ -249,6 +249,8 @@ PYBIND11_MODULE(_core, m) {
             [](CoreProblem &self) { return cardal_problem_num_variables(self.raw); })
         .def_property_readonly("lp_dim",
             [](CoreProblem &self) { return cardal_problem_lp_dim(self.raw); })
+        .def_property_readonly("free_dim",
+            [](CoreProblem &self) { return cardal_problem_free_dim(self.raw); })
         .def_property_readonly("block_dims",
             [](CoreProblem &self) {
                 int n = cardal_problem_num_cones(self.raw);
@@ -296,6 +298,14 @@ PYBIND11_MODULE(_core, m) {
                  return borrow_as_numpy(p, n, self);
              },
              "Return the low-rank primal factor as a zero-copy numpy view.")
+        .def("lp_primal",
+             [](py::object self) {
+                 CoreResult &r = self.cast<CoreResult &>();
+                 int n = 0;
+                 const double *p = cardal_result_lp_primal(r.raw, &n);
+                 return borrow_as_numpy(p, n, self);
+             },
+             "Return nonnegative LP primal variables as a zero-copy numpy view.")
         .def("dual",
              [](py::object self) {
                  CoreResult &r = self.cast<CoreResult &>();
@@ -304,6 +314,14 @@ PYBIND11_MODULE(_core, m) {
                  return borrow_as_numpy(p, n, self);
              },
              "Return the dual solution y as a zero-copy numpy view.")
+        .def("free_primal",
+             [](py::object self) {
+                 CoreResult &r = self.cast<CoreResult &>();
+                 int n = 0;
+                 const double *p = cardal_result_free_primal(r.raw, &n);
+                 return borrow_as_numpy(p, n, self);
+             },
+             "Return unrestricted primal variables as a zero-copy numpy view.")
         .def("rank_list",
              [](py::object self) {
                  CoreResult &r = self.cast<CoreResult &>();
@@ -384,6 +402,7 @@ PYBIND11_MODULE(_core, m) {
           [](int num_constraints,
              int num_cones,
              int lp_dim,
+             int free_dim,
              py::array_t<int, py::array::c_style | py::array::forcecast> blk_dims,
              // C
              py::array_t<int, py::array::c_style | py::array::forcecast> c_cone_ind,
@@ -401,6 +420,11 @@ PYBIND11_MODULE(_core, m) {
              py::array_t<int, py::array::c_style | py::array::forcecast> lp_constr_ind,
              py::array_t<int, py::array::c_style | py::array::forcecast> lp_col_ind,
              py::array_t<double, py::array::c_style | py::array::forcecast> lp_val,
+             // Free variables
+             py::array_t<double, py::array::c_style | py::array::forcecast> free_obj,
+             py::array_t<int, py::array::c_style | py::array::forcecast> free_constr_ind,
+             py::array_t<int, py::array::c_style | py::array::forcecast> free_col_ind,
+             py::array_t<double, py::array::c_style | py::array::forcecast> free_val,
              // b
              py::array_t<double, py::array::c_style | py::array::forcecast> b)
           {
@@ -412,10 +436,14 @@ PYBIND11_MODULE(_core, m) {
                           ", expected " + std::to_string(want));
                   }
               };
-              if (num_constraints < 0 || num_cones < 0 || lp_dim < 0)
-                  throw py::value_error("num_constraints, num_cones, lp_dim must all be >= 0");
-              if (num_cones == 0 && lp_dim == 0)
-                  throw py::value_error("problem must have at least one cone or an LP block");
+              if (num_constraints < 0 || num_cones < 0 || lp_dim < 0 ||
+                  free_dim < 0)
+                  throw py::value_error(
+                      "num_constraints, num_cones, lp_dim, and free_dim "
+                      "must all be >= 0");
+              if (num_cones == 0 && lp_dim == 0 && free_dim == 0)
+                  throw py::value_error(
+                      "problem must have at least one cone or linear block");
               check_size("blk_dims", blk_dims.size(), num_cones);
               check_size("b",        b.size(),        num_constraints);
               const py::ssize_t nnz_c = c_val.size();
@@ -431,11 +459,16 @@ PYBIND11_MODULE(_core, m) {
               const py::ssize_t nnz_lp = lp_val.size();
               check_size("lp_constr_ind", lp_constr_ind.size(), nnz_lp);
               check_size("lp_col_ind",    lp_col_ind.size(),    nnz_lp);
+              check_size("free_obj", free_obj.size(), free_dim);
+              const py::ssize_t nnz_free = free_val.size();
+              check_size("free_constr_ind", free_constr_ind.size(), nnz_free);
+              check_size("free_col_ind", free_col_ind.size(), nnz_free);
 
               cardal_problem_data d = {};
               d.num_constraints = num_constraints;
               d.num_cones       = num_cones;
               d.lp_dim          = lp_dim;
+              d.free_dim        = free_dim;
               d.blk_dims        = num_cones > 0 ? blk_dims.data() : nullptr;
               d.nnz_c        = (int)nnz_c;
               d.c_cone_ind   = nnz_c > 0 ? c_cone_ind.data() : nullptr;
@@ -453,6 +486,12 @@ PYBIND11_MODULE(_core, m) {
               d.lp_constr_ind = nnz_lp > 0 ? lp_constr_ind.data() : nullptr;
               d.lp_col_ind    = nnz_lp > 0 ? lp_col_ind.data()    : nullptr;
               d.lp_val        = nnz_lp > 0 ? lp_val.data()        : nullptr;
+              d.free_obj      = free_dim > 0 ? free_obj.data() : nullptr;
+              d.nnz_free      = (int)nnz_free;
+              d.free_constr_ind =
+                  nnz_free > 0 ? free_constr_ind.data() : nullptr;
+              d.free_col_ind = nnz_free > 0 ? free_col_ind.data() : nullptr;
+              d.free_val = nnz_free > 0 ? free_val.data() : nullptr;
               d.b            = num_constraints > 0 ? b.data() : nullptr;
 
               cardal_error err = CARDAL_OK;
@@ -470,6 +509,7 @@ PYBIND11_MODULE(_core, m) {
           py::arg("num_constraints"),
           py::arg("num_cones"),
           py::arg("lp_dim"),
+          py::arg("free_dim"),
           py::arg("blk_dims"),
           py::arg("c_cone_ind"),
           py::arg("c_row_ind"),
@@ -484,6 +524,10 @@ PYBIND11_MODULE(_core, m) {
           py::arg("lp_constr_ind"),
           py::arg("lp_col_ind"),
           py::arg("lp_val"),
+          py::arg("free_obj"),
+          py::arg("free_constr_ind"),
+          py::arg("free_col_ind"),
+          py::arg("free_val"),
           py::arg("b"),
           "Build a Problem from COO triplet numpy arrays. All int arrays are\n"
           "0-indexed. C copies internally; the numpy inputs may be freed after\n"

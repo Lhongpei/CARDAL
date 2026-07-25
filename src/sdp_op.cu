@@ -57,6 +57,33 @@ __global__ void compute_lp_gradient_kernel(double *__restrict__ lp_grad,
     lp_grad[idx] = 2.0 * (lp_C[idx] + dual_prod[idx]) * lp_v[idx];
   }
 }
+
+__global__ void compute_free_primal_kernel(
+    double *__restrict__ primal_sol, const double *__restrict__ free_x,
+    int free_dim) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < free_dim)
+    primal_sol[idx] = free_x[idx];
+}
+
+__global__ void compute_free_gradient_kernel(
+    double *__restrict__ free_grad, const double *__restrict__ free_obj,
+    const double *__restrict__ dual_prod, int free_dim) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < free_dim)
+    free_grad[idx] = free_obj[idx] + dual_prod[idx];
+}
+
+__global__ void compute_free_line_search_kernel(
+    const double *__restrict__ free_direction,
+    double *__restrict__ primal_cross, int free_dim) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < free_dim) {
+    // The shared line-search path doubles q1 after the SpMV.
+    primal_cross[idx] = 0.5 * free_direction[idx];
+  }
+}
+
 __global__ void add_Ay_to_S_kernel(double *__restrict__ S_val,
                                    const double *__restrict__ Ay_val_global,
                                    const int *__restrict__ compat_mapping,
@@ -807,6 +834,7 @@ void populate_state_scaling_fields(cardal_sdp_solver_state_t *state,
   if (info == NULL) {
     state->constraint_rescaling = NULL;
     state->lp_variable_rescaling = NULL;
+    state->free_variable_rescaling = NULL;
     state->q0_unscaled_buf = NULL;
     state->objective_vector_rescaling = 1.0;
     state->right_hand_side_rescaling = 1.0;
@@ -839,6 +867,18 @@ void populate_state_scaling_fields(cardal_sdp_solver_state_t *state,
                           cudaMemcpyHostToDevice));
   } else {
     state->lp_variable_rescaling = NULL;
+  }
+
+  int free_dim = state->free_dim;
+  if (free_dim > 0 && info->free_variable_rescaling != NULL) {
+    CUDA_CHECK(cudaMalloc(&state->free_variable_rescaling,
+                          (size_t)free_dim * sizeof(double)));
+    CUDA_CHECK(cudaMemcpy(state->free_variable_rescaling,
+                          info->free_variable_rescaling,
+                          (size_t)free_dim * sizeof(double),
+                          cudaMemcpyHostToDevice));
+  } else {
+    state->free_variable_rescaling = NULL;
   }
 
   state->objective_vector_rescaling = info->objective_vector_rescaling;
@@ -933,7 +973,7 @@ void unscale_result(const rescale_info_t *info,
       psd_offset += n_k;
     }
 
-    // LP variables sit at state->lp_solution_offset in the same buffer.
+    // LP entries have already been converted from factors v to x = v^2.
     if (state->lp_dim > 0) {
       double *lp = result->low_rank_primal_solution + state->lp_solution_offset;
       for (int i = 0; i < state->lp_dim; i++) {
@@ -941,6 +981,16 @@ void unscale_result(const rescale_info_t *info,
                          ? info->lp_variable_rescaling[i]
                          : 1.0;
         lp[i] *= inv_tau_b / d_i;
+      }
+    }
+    if (state->free_dim > 0) {
+      double *free_x =
+          result->low_rank_primal_solution + state->free_solution_offset;
+      for (int i = 0; i < state->free_dim; i++) {
+        double d_i = (info->free_variable_rescaling != NULL)
+                         ? info->free_variable_rescaling[i]
+                         : 1.0;
+        free_x[i] *= inv_tau_b / d_i;
       }
     }
   }

@@ -226,6 +226,7 @@ static void save_solver_summary(const sdp_result_t *result,
 
   if (prob != NULL) {
     fprintf(outfile, "LP Variables: %d\n", prob->lp_dim);
+    fprintf(outfile, "Free Variables: %d\n", prob->free_dim);
     fprintf(outfile, "PSD Cones: %d\n", prob->n_blks);
     write_cone_size_distribution(outfile, prob);
   }
@@ -241,8 +242,18 @@ static void save_solver_solutions(const sdp_result_t *result,
     return;
 
   save_double_vector(result->low_rank_primal_solution,
-                     result->low_rank_solution_length, output_dir,
+                     result->psd_factor_length, output_dir,
                      instance_name, "_primal_factor.txt");
+  if (result->lp_dim > 0) {
+    save_double_vector(
+        result->low_rank_primal_solution + result->lp_solution_offset,
+        result->lp_dim, output_dir, instance_name, "_lp_primal.txt");
+  }
+  if (result->free_dim > 0) {
+    save_double_vector(
+        result->low_rank_primal_solution + result->free_solution_offset,
+        result->free_dim, output_dir, instance_name, "_free_primal.txt");
+  }
   save_int_vector(result->rank_list, result->n_cones, output_dir, instance_name,
                   "_rank_list.txt");
   save_double_vector(result->dual_solution, result->num_constraints, output_dir,

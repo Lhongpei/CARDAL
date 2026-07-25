@@ -1,7 +1,7 @@
 # Results and Outputs
 
-CARDAL reports objectives, residuals, iteration counts, and the final low-rank
-primal factors.
+CARDAL reports objectives, residuals, iteration counts, low-rank PSD factors,
+linear primal variables, and equality-constraint multipliers.
 
 ## Termination status
 
@@ -35,6 +35,8 @@ a `Result` with `USER_INTERRUPT`.
 | `total_rank` | `int` | Sum of final PSD block ranks |
 | `rank_list` | `numpy.ndarray` | Final rank of each PSD block |
 | `primal_factor` | `numpy.ndarray` | Flattened PSD factors |
+| `lp_primal` | `numpy.ndarray` | Nonnegative LP primal variables |
+| `free_primal` | `numpy.ndarray` | Unrestricted primal variables |
 | `dual` | `numpy.ndarray` | Dual multipliers |
 
 Use `result.summary()` for a formatted report.
@@ -71,6 +73,14 @@ int factor_length = 0;
 const double *factor =
     cardal_result_primal_factor(result, &factor_length);
 
+int lp_length = 0;
+const double *lp =
+    cardal_result_lp_primal(result, &lp_length);
+
+int free_length = 0;
+const double *free_variables =
+    cardal_result_free_primal(result, &free_length);
+
 int dual_length = 0;
 const double *dual =
     cardal_result_dual(result, &dual_length);
@@ -87,9 +97,14 @@ writes:
 ```text
 <output-dir>/<instance>_summary.txt
 <output-dir>/<instance>_primal_factor.txt
+<output-dir>/<instance>_lp_primal.txt
+<output-dir>/<instance>_free_primal.txt
 <output-dir>/<instance>_rank_list.txt
 <output-dir>/<instance>_dual_solution.txt
 ```
+
+The LP and free files are written only when the corresponding block is
+present.
 
 The summary includes the status, objectives, relative residuals, gap, rank,
 iteration counts, runtime, and rescaling time when applicable.
@@ -97,8 +112,8 @@ iteration counts, runtime, and rescaling time when applicable.
 Each solution file contains one value per line. The primal factor uses the same
 layout as the Python and C result buffers: PSD cones are stored consecutively,
 with each \(n_c \times r_c\) factor in column-major order. The corresponding
-entry in `rank_list` gives \(r_c\). If an LP tail is present, it follows the PSD
-factor data. The dual file contains one multiplier per constraint.
+entry in `rank_list` gives \(r_c\). LP and unrestricted variables are written
+to their own files. The dual file contains one multiplier per constraint.
 
 For example:
 

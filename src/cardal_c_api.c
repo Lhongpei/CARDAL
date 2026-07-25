@@ -178,11 +178,12 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
   }
   /* Basic shape validation. Reject obviously malformed input rather than
    * segfault deep inside convert_to_compressed. */
-  if (data->num_constraints < 0 || data->num_cones < 0 || data->lp_dim < 0) {
+  if (data->num_constraints < 0 || data->num_cones < 0 || data->lp_dim < 0 ||
+      data->free_dim < 0) {
     SET_ERR(CARDAL_E_NULL_ARG);
     return NULL;
   }
-  if (data->num_cones == 0 && data->lp_dim == 0) {
+  if (data->num_cones == 0 && data->lp_dim == 0 && data->free_dim == 0) {
     SET_ERR(CARDAL_E_NULL_ARG);
     return NULL;
   }
@@ -198,12 +199,17 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
     SET_ERR(CARDAL_E_NULL_ARG);
     return NULL;
   }
+  if (data->free_dim > 0 && data->free_obj == NULL) {
+    SET_ERR(CARDAL_E_NULL_ARG);
+    return NULL;
+  }
 
   basic_sdp_t *basic = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
   memset(basic, 0, sizeof(*basic));
   basic->m       = data->num_constraints;
   basic->n_cones = data->num_cones;
   basic->lp_dim  = data->lp_dim;
+  basic->free_dim = data->free_dim;
   basic->blk_dims        = dup_ints(data->blk_dims, data->num_cones);
   basic->right_hand_side = dup_doubles(data->b,     data->num_constraints);
 
@@ -245,6 +251,21 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
     basic->lp_constraints->col_ind = dup_ints(data->lp_col_ind,    data->nnz_lp);
     basic->lp_constraints->val     = dup_doubles(data->lp_val,     data->nnz_lp);
   }
+  if (data->free_dim > 0) {
+    basic->free_objective = dup_doubles(data->free_obj, data->free_dim);
+    basic->nnz_free_obj = data->free_dim;
+  }
+  basic->nnz_free_constr = data->nnz_free;
+  if (data->nnz_free > 0) {
+    basic->free_constraints =
+        (free_constraint_t *)safe_malloc(sizeof(free_constraint_t));
+    basic->free_constraints->row_ind =
+        dup_ints(data->free_constr_ind, data->nnz_free);
+    basic->free_constraints->col_ind =
+        dup_ints(data->free_col_ind, data->nnz_free);
+    basic->free_constraints->val =
+        dup_doubles(data->free_val, data->nnz_free);
+  }
 
   compressed_sdp_problem_t *comp = convert_to_compressed(basic);
   if (comp == NULL) {
@@ -281,6 +302,10 @@ int cardal_problem_num_variables(const cardal_problem *p) {
 
 int cardal_problem_lp_dim(const cardal_problem *p) {
   return (p && p->compressed) ? p->compressed->lp_dim : 0;
+}
+
+int cardal_problem_free_dim(const cardal_problem *p) {
+  return (p && p->compressed) ? p->compressed->free_dim : 0;
 }
 
 cardal_error cardal_problem_get_block_dims(const cardal_problem *p,
@@ -376,8 +401,32 @@ const double *cardal_result_primal_factor(const cardal_result *r,
     if (out_length) *out_length = 0;
     return NULL;
   }
-  if (out_length) *out_length = (int)r->inner->low_rank_solution_length;
+  if (out_length) *out_length = (int)r->inner->psd_factor_length;
   return r->inner->low_rank_primal_solution;
+}
+
+const double *cardal_result_lp_primal(const cardal_result *r,
+                                      int *out_length) {
+  if (r == NULL || r->inner == NULL || r->inner->lp_dim <= 0 ||
+      r->inner->low_rank_primal_solution == NULL) {
+    if (out_length) *out_length = 0;
+    return NULL;
+  }
+  if (out_length) *out_length = r->inner->lp_dim;
+  return r->inner->low_rank_primal_solution +
+         r->inner->lp_solution_offset;
+}
+
+const double *cardal_result_free_primal(const cardal_result *r,
+                                        int *out_length) {
+  if (r == NULL || r->inner == NULL || r->inner->free_dim <= 0 ||
+      r->inner->low_rank_primal_solution == NULL) {
+    if (out_length) *out_length = 0;
+    return NULL;
+  }
+  if (out_length) *out_length = r->inner->free_dim;
+  return r->inner->low_rank_primal_solution +
+         r->inner->free_solution_offset;
 }
 
 const double *cardal_result_dual(const cardal_result *r, int *out_length) {

@@ -135,6 +135,89 @@ def test_set_problem_coo_smallest_eig():
     assert abs(result.primal_objective - 1.0) < 1e-3
 
 
+def test_native_free_variables():
+    # min x_0 - 2 x_1, subject to 2 x_0 = 2 and 0.5 x_1 = -1.
+    # The unique solution is x = (1, -2), with objective 5.
+    m = Model()
+    m.set_problem(
+        block_dims=[],
+        C=[],
+        A=[[], []],
+        b=[2.0, -1.0],
+        free_dim=2,
+        free_obj=[1.0, -2.0],
+        A_free=np.array([[2.0, 0.0], [0.0, 0.5]]),
+    )
+    assert m.num_cones == 0
+    assert m.lp_dim == 0
+    assert m.free_dim == 2
+
+    result = m.solve(
+        time_sec_limit=10.0,
+        inner_iterations_limit=1000,
+        eps_optimal_relative=1e-7,
+        eps_primal_relative=1e-7,
+        eps_dual_relative=1e-7,
+        verbose=0,
+    )
+    assert result.status is cardal.OPTIMAL
+    np.testing.assert_allclose(result.free_primal, [1.0, -2.0], atol=1e-6)
+    assert result.primal_factor.size == 0
+    assert result.lp_primal.size == 0
+    assert abs(result.primal_objective - 5.0) < 1e-6
+    assert result.rel_primal_residual < 1e-7
+    assert result.rel_dual_residual < 1e-7
+
+
+def test_mixed_psd_lp_and_free_variables():
+    # min <diag(1, 2), X> + x_lp + 3 x_free
+    # s.t. trace(X)=1, x_lp=2, x_free=-1.
+    # The optimum is diag(1, 0), x_lp=2, x_free=-1, with objective 0.
+    m = Model()
+    m.set_problem(
+        block_dims=[2],
+        C=[np.diag([1.0, 2.0])],
+        A=[
+            [np.eye(2)],
+            [None],
+            [None],
+        ],
+        b=[1.0, 2.0, -1.0],
+        lp_dim=1,
+        lp_obj=[1.0],
+        A_lp=np.array([[0.0], [1.0], [0.0]]),
+        free_dim=1,
+        free_obj=[3.0],
+        A_free=np.array([[0.0], [0.0], [1.0]]),
+    )
+
+    result = m.solve(
+        time_sec_limit=20.0,
+        eps_optimal_relative=1e-6,
+        eps_primal_relative=1e-6,
+        eps_dual_relative=1e-6,
+        verbose=0,
+    )
+    assert result.status is cardal.OPTIMAL
+    assert result.primal_factor.size == 2 * int(result.rank_list[0])
+    np.testing.assert_allclose(result.lp_primal, [2.0], atol=1e-5)
+    np.testing.assert_allclose(result.free_primal, [-1.0], atol=1e-5)
+    assert abs(result.primal_objective) < 1e-4
+
+
+def test_free_objective_is_required():
+    m = Model()
+    with pytest.raises(ValueError, match="free_obj required"):
+        m.set_problem(
+            block_dims=[],
+            C=[],
+            A=[[]],
+            b=[0.0],
+            free_dim=1,
+            A_free=np.ones((1, 1)),
+        )
+
+
 def test_set_problem_shape_mismatch_raises():
     m = Model()
     with pytest.raises(ValueError, match="len\\(C\\)="):

@@ -45,6 +45,8 @@ typedef struct {
   double *val;
 } lp_constraint_t;
 
+typedef lp_constraint_t free_constraint_t;
+
 typedef struct {
   // --- Data Pointers ---
   psd_cone_constraint_t *psd_cone_constraints;
@@ -54,9 +56,14 @@ typedef struct {
   lp_constraint_t *lp_constraints;
   double *lp_objective;
 
+  // Unrestricted real variables
+  free_constraint_t *free_constraints;
+  double *free_objective;
+
   double *right_hand_side; // Vector b
   int *blk_dims;           // Block dimensions
   int lp_dim;
+  int free_dim;
 
   // --- Size Components (Added) ---
   int m;       // Total number of constraints
@@ -67,6 +74,9 @@ typedef struct {
 
   int nnz_lp_constr; // Length of arrays in lp_constraints (if used)
   int nnz_lp_obj;    // Length of arrays in lp_objective (if used)
+
+  int nnz_free_constr;
+  int nnz_free_obj;
 
 } basic_sdp_t;
 
@@ -103,6 +113,10 @@ typedef struct {
   int lp_dim;
   int lp_start_idx;
   double *lp_objective_vector;
+
+  int free_dim;
+  int free_start_idx;
+  double *free_objective_vector;
 
   double *right_hand_side;
 
@@ -166,6 +180,11 @@ typedef struct {
 
   double *low_rank_primal_solution;
   long long low_rank_solution_length;
+  long long psd_factor_length;
+  int lp_dim;
+  int free_dim;
+  int lp_solution_offset;
+  int free_solution_offset;
   int n_cones;
   int *rank_list;
   double *dual_solution;

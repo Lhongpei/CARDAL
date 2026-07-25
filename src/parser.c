@@ -147,7 +147,15 @@ void free_basic_sdp(basic_sdp_t *sdp) {
     free(sdp->lp_constraints);
   }
 
+  if (sdp->free_constraints) {
+    free(sdp->free_constraints->row_ind);
+    free(sdp->free_constraints->col_ind);
+    free(sdp->free_constraints->val);
+    free(sdp->free_constraints);
+  }
+
   free(sdp->lp_objective);
+  free(sdp->free_objective);
   free(sdp->right_hand_side);
   free(sdp->blk_dims);
   free(sdp);

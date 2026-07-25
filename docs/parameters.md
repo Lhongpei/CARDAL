@@ -93,7 +93,7 @@ values are `CARDAL_PSD_SCALE_PER_ELEMENT` and
 |:--|:--|:--|
 | `--grid-size row,rank,cone` | Automatic | Distributed process-grid topology |
 | `--shuffle` | `col` | Distributed constraint ordering: `none`, `uniform`, `block`, or `col` |
-| `--output-dir` | None | Write the summary, primal factor, rank list, and dual solution |
+| `--output-dir` | None | Write the summary and primal/dual solution files |
 
 These settings control execution or CLI output rather than the mathematical
 solver configuration, so they are not members of the single-GPU Python

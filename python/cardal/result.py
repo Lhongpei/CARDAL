@@ -48,6 +48,10 @@ class Result:
         Sum of per-cone Burer-Monteiro ranks at termination.
     primal_factor
         Flattened low-rank primal factor. Length = sum(dim_c * rank_c).
+    lp_primal
+        Nonnegative LP primal variables.
+    free_primal
+        Unrestricted primal variables.
     dual
         Dual solution y. Length = num_constraints.
     rank_list
@@ -73,6 +77,8 @@ class Result:
     num_constraints: int
     total_rank: int
     primal_factor: np.ndarray
+    lp_primal: np.ndarray
+    free_primal: np.ndarray
     dual: np.ndarray
     rank_list: np.ndarray
     _handle: object = field(repr=False)
@@ -135,6 +141,8 @@ def _make_result(core_result: object) -> Result:
         num_constraints=int(core_result.num_constraints),
         total_rank=int(core_result.total_rank),
         primal_factor=np.asarray(core_result.primal_factor()),
+        lp_primal=np.asarray(core_result.lp_primal()),
+        free_primal=np.asarray(core_result.free_primal()),
         dual=np.asarray(core_result.dual()),
         rank_list=np.asarray(core_result.rank_list()),
         _handle=core_result,

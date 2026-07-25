@@ -105,5 +105,5 @@ mpirun -n 8 ./build/cardal \
   --output-dir results
 ```
 
-Only the root process writes the consolidated summary, primal factor, rank
-list, and dual solution.
+Only the root process writes the consolidated summary, PSD factor, optional
+LP/free primal vectors, rank list, and dual solution.

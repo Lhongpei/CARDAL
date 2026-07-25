@@ -81,15 +81,20 @@ For the C/CUDA command-line solver, build from source and run:
 
 ## Problem class
 
-CARDAL solves block-structured SDPs with an optional nonnegative LP tail:
+CARDAL solves block-structured SDPs with optional nonnegative and unrestricted
+linear variables:
 
 \[
 \begin{aligned}
-\min_X \quad & \langle C, X \rangle \\
-\mathrm{s.t.}\quad & \langle A_i, X \rangle = b_i,
+\min \quad & \sum_c\langle C_c,X_c\rangle
+  +c_{\mathrm{LP}}^\top x_{\mathrm{LP}}
+  +c_{\mathrm{free}}^\top x_{\mathrm{free}} \\
+\mathrm{s.t.}\quad & \sum_c\langle A_{i,c},X_c\rangle
+  +a_{i,\mathrm{LP}}^\top x_{\mathrm{LP}}
+  +a_{i,\mathrm{free}}^\top x_{\mathrm{free}}=b_i,
   \qquad i=1,\ldots,m, \\
-& X = \mathrm{blkdiag}(X_1,\ldots,X_p,x_{\mathrm{LP}}),\\
-& X_c \succeq 0,\qquad x_{\mathrm{LP}}\ge 0.
+& X_c \succeq 0,\qquad x_{\mathrm{LP}}\ge 0,\qquad
+  x_{\mathrm{free}}\in\mathbb{R}^{d_{\mathrm{free}}}.
 \end{aligned}
 \]
 

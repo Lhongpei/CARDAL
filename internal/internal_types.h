@@ -113,6 +113,7 @@ typedef struct {
     double *constraint_rescaling;
     double *psd_cone_rescaling;       // [Σ blk_dims], per-X-row factor d^(b)[i]
     double *lp_variable_rescaling;
+    double *free_variable_rescaling;
     double  objective_vector_rescaling;
     double  right_hand_side_rescaling;
     double  unscaled_right_hand_side_norm;
@@ -165,6 +166,7 @@ typedef struct {
   int num_constraints;
   int n_blks;
   int lp_dim;
+  int free_dim;
   int n_active_vars;
   int *blk_dims;
   long long *blk_ptr;
@@ -191,6 +193,12 @@ typedef struct {
   double *lp_objective_vector;
   double *lp_slack_buffer;
   double *lp_min_slack_buf;
+
+  // Unrestricted-variable struct
+  int free_start_active_idx;
+  int free_solution_offset;
+  double *free_objective_vector;
+  double *free_stationarity_buffer;
 
   // Complete Solution and Calculation Buffer
   double *primal_solution;
@@ -228,6 +236,7 @@ typedef struct {
   // Rescale Info and Buffer
   double *constraint_rescaling;
   double *lp_variable_rescaling;
+  double *free_variable_rescaling;
   double  objective_vector_rescaling;
   double  right_hand_side_rescaling;
   double  unscaled_right_hand_side_norm;

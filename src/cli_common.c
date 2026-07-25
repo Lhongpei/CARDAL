@@ -201,8 +201,7 @@ void cli_print_solver_param_help(void) {
          "k=cone axis (default 1)\n");
   printf("  -O, --output-dir <path> Directory to write the summary, primal "
          "factor,\n");
-  printf("                          rank list, and dual solution (created if "
-         "missing)\n");
+  printf("                          LP/free vectors, rank list, and dual solution\n");
   printf("  -h, --help              Print this help message and exit\n");
   printf("\n");
   printf("Scaling (preconditioning):\n");

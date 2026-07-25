@@ -110,6 +110,31 @@ model.set_problem(
 `A_lp` has shape `(num_constraints, lp_dim)`. It may be a NumPy array or a
 SciPy sparse matrix.
 
+## Add unrestricted variables
+
+Declare a native free block with `free_dim`, its objective `free_obj`, and the
+constraint matrix `A_free`:
+
+```python
+model.set_problem(
+    block_dims=[],
+    C=[],
+    A=[[], []],
+    b=[2.0, -1.0],
+    free_dim=2,
+    free_obj=np.array([1.0, -2.0]),
+    A_free=np.array([[2.0, 0.0], [0.0, 0.5]]),
+)
+
+result = model.solve(verbose=0)
+print(result.free_primal)
+```
+
+`A_free` has shape `(num_constraints, free_dim)` and accepts the same dense
+and SciPy sparse inputs as `A_lp`. Free variables are represented directly;
+CARDAL does not split them into positive and negative parts. The COO form is
+`A_free=(constraint, column, value)`.
+
 ## Solver parameters
 
 Pass parameter overrides as keyword arguments:
@@ -147,9 +172,10 @@ print(defaults)
 | `Model.default_params()` | Return all recognized parameters and defaults |
 | `num_cones` | Number of PSD blocks |
 | `num_constraints` | Number of equality constraints |
-| `num_variables` | Total triangular PSD plus LP variable count |
+| `num_variables` | Total triangular PSD, LP, and free variable count |
 | `block_dims` | PSD block dimensions |
 | `lp_dim` | Size of the nonnegative LP tail |
+| `free_dim` | Size of the unrestricted real block |
 
 ## Cancellation
 

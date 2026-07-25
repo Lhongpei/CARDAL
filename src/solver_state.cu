@@ -94,6 +94,15 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
     }
   }
 
+  if (sdp_problem->free_dim > 0 &&
+      sdp_problem->free_objective_vector != NULL) {
+    for (int i = 0; i < sdp_problem->free_dim; i++) {
+      double val = sdp_problem->free_objective_vector[i];
+      norm_C_sq += fabs(val);
+      norm_C_inf = fmax(fabs(val), norm_C_inf);
+    }
+  }
+
   state->objective_vector_norm = norm_C_sq;
   state->objective_vector_linf_norm = norm_C_inf;
 
@@ -112,6 +121,8 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
 
   state->lp_dim = sdp_problem->lp_dim;
   state->lp_start_active_idx = sdp_problem->lp_start_idx;
+  state->free_dim = sdp_problem->free_dim;
+  state->free_start_active_idx = sdp_problem->free_start_idx;
 
   state->n_active_vars = n_act_vars;
   state->blk_dims = (int *)safe_malloc(n_cones * sizeof(int));
@@ -223,6 +234,8 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
 
   state->lp_solution_offset = total_lowrank_size;
   total_lowrank_size += state->lp_dim;
+  state->free_solution_offset = total_lowrank_size;
+  total_lowrank_size += state->free_dim;
 
   state->length_low_rank_solution = total_lowrank_size;
   ALLOC_ZERO(state->low_rank_solution, total_lowrank_size * sizeof(double));
@@ -251,7 +264,26 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
     CUDA_CHECK(cudaMalloc(&state->lp_min_slack_buf, sizeof(double)));
   } else {
     state->lp_objective_vector = NULL;
+    state->lp_slack_buffer = NULL;
     state->lp_min_slack_buf = NULL;
+  }
+
+  if (state->free_dim > 0) {
+    CUDA_CHECK(cudaMalloc(&state->free_objective_vector,
+                          state->free_dim * sizeof(double)));
+    if (sdp_problem->free_objective_vector != NULL) {
+      CUDA_CHECK(cudaMemcpy(
+          state->free_objective_vector, sdp_problem->free_objective_vector,
+          state->free_dim * sizeof(double), cudaMemcpyHostToDevice));
+    } else {
+      CUDA_CHECK(cudaMemset(state->free_objective_vector, 0,
+                            state->free_dim * sizeof(double)));
+    }
+    CUDA_CHECK(cudaMalloc(&state->free_stationarity_buffer,
+                          state->free_dim * sizeof(double)));
+  } else {
+    state->free_objective_vector = NULL;
+    state->free_stationarity_buffer = NULL;
   }
 
   ALLOC_ZERO(state->primal_solution, state->n_active_vars * sizeof(double));
@@ -1120,6 +1152,8 @@ void augment_system_rank(cardal_sdp_solver_state_t *state,
 
   int new_lp_solution_offset = new_total_len;
   new_total_len += state->lp_dim;
+  int new_free_solution_offset = new_total_len;
+  new_total_len += state->free_dim;
 
   if (actually_augmented_blocks == 0) {
     if (state->verbose >= 3)
@@ -1274,6 +1308,13 @@ void augment_system_rank(cardal_sdp_solver_state_t *state,
 
     state->lp_solution_offset = new_lp_solution_offset;
   }
+  if (state->free_dim > 0) {
+    CUDA_CHECK(cudaMemcpy(
+        new_global_R + new_free_solution_offset,
+        state->low_rank_solution + state->free_solution_offset,
+        state->free_dim * sizeof(double), cudaMemcpyDeviceToDevice));
+    state->free_solution_offset = new_free_solution_offset;
+  }
 
   CUDA_CHECK(cudaFree(state->low_rank_solution));
   CUDA_CHECK(cudaFree(state->low_rank_gradient));
@@ -1329,7 +1370,17 @@ create_result_from_state(cardal_sdp_solver_state_t *state,
                         state->low_rank_solution,
                         state->length_low_rank_solution * sizeof(double),
                         cudaMemcpyDeviceToHost));
+  for (int i = 0; i < state->lp_dim; i++) {
+    double v =
+        result->low_rank_primal_solution[state->lp_solution_offset + i];
+    result->low_rank_primal_solution[state->lp_solution_offset + i] = v * v;
+  }
   result->low_rank_solution_length = state->length_low_rank_solution;
+  result->psd_factor_length = state->lp_solution_offset;
+  result->lp_dim = state->lp_dim;
+  result->free_dim = state->free_dim;
+  result->lp_solution_offset = state->lp_solution_offset;
+  result->free_solution_offset = state->free_solution_offset;
   result->n_cones = state->n_blks;
   result->rank_list = (int *)safe_malloc(state->n_blks * sizeof(int));
   safe_memcpy(result->rank_list, state->rank_list,
@@ -1486,10 +1537,13 @@ void free_solver_state(cardal_sdp_solver_state_t *state) {
 
   if (state->constraint_rescaling)  CUDA_CHECK(cudaFree(state->constraint_rescaling));
   if (state->lp_variable_rescaling) CUDA_CHECK(cudaFree(state->lp_variable_rescaling));
+  if (state->free_variable_rescaling) CUDA_CHECK(cudaFree(state->free_variable_rescaling));
 
   if (state->lp_objective_vector) CUDA_CHECK(cudaFree(state->lp_objective_vector));
   if (state->lp_slack_buffer)     CUDA_CHECK(cudaFree(state->lp_slack_buffer));
   if (state->lp_min_slack_buf)    CUDA_CHECK(cudaFree(state->lp_min_slack_buf));
+  if (state->free_objective_vector) CUDA_CHECK(cudaFree(state->free_objective_vector));
+  if (state->free_stationarity_buffer) CUDA_CHECK(cudaFree(state->free_stationarity_buffer));
 
   if (state->primal_spmv_buffer) CUDA_CHECK(cudaFree(state->primal_spmv_buffer));
   if (state->dual_spmv_buffer)   CUDA_CHECK(cudaFree(state->dual_spmv_buffer));

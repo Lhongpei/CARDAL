@@ -6,18 +6,22 @@ CARDAL solves minimization-form semidefinite programs
 
 \[
 \begin{aligned}
-\min_X \quad & \langle C, X\rangle\\
+\min \quad &
+\sum_c\langle C_c,X_c\rangle+c_{\mathrm{LP}}^\top x_{\mathrm{LP}}
++c_{\mathrm{free}}^\top x_{\mathrm{free}}\\
 \mathrm{s.t.}\quad
-& \langle A_i,X\rangle=b_i,\qquad i=1,\ldots,m,\\
-& X=\mathrm{blkdiag}(X_1,\ldots,X_p,x_{\mathrm{LP}}),\\
+& \sum_c\langle A_{i,c},X_c\rangle
+  +a_{i,\mathrm{LP}}^\top x_{\mathrm{LP}}
+  +a_{i,\mathrm{free}}^\top x_{\mathrm{free}}=b_i,\\
 & X_c\succeq0,\qquad c=1,\ldots,p,\\
-& x_{\mathrm{LP}}\geq0.
+& x_{\mathrm{LP}}\geq0,\qquad
+  x_{\mathrm{free}}\in\mathbb{R}^{d_{\mathrm{free}}}.
 \end{aligned}
 \]
 
 Here \(X_c\in\mathbb{S}^{n_c}\) are PSD blocks and the optional
 \(x_{\mathrm{LP}}\in\mathbb{R}^{d_{\mathrm{LP}}}\) is a nonnegative linear
-block.
+block, and \(x_{\mathrm{free}}\) is an optional unrestricted real block.
 
 ## Low-rank representation
 
@@ -32,12 +36,13 @@ CARDAL stores and optimizes the factors \(V_c\), not dense \(n_c\times n_c\)
 primal matrices. A solve returns the flattened factors together with the final
 per-cone ranks.
 
-## Supported cones
+## Supported domains
 
-| Cone | Representation |
+| Domain | Representation |
 |:--|:--|
 | Positive semidefinite | One or more symmetric blocks declared by `block_dims` |
 | Nonnegative orthant | One optional LP tail declared by `lp_dim` |
+| Unrestricted real | One optional free block declared by `free_dim` |
 
 Second-order, exponential, power, and generic bounded cones are not currently
 supported.
@@ -87,4 +92,3 @@ The same mathematical problem can enter CARDAL through several routes:
 The [File Formats](file-formats.md) page documents file schemas. The
 [Python](python.md), [C API](c-api.md), and [CLI](cli.md) pages show the
 interface-specific calls.
-

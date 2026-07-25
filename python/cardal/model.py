@@ -82,12 +82,15 @@ def _matrix_to_lower_coo(mat, dim: int, label: str):
     return rows[mask], cols[mask], vals[mask]
 
 
-def _lp_matrix_to_coo(mat, num_constraints: int, lp_dim: int):
+def _linear_matrix_to_coo(
+    mat, num_constraints: int, variable_dim: int, label: str
+):
     if hasattr(mat, "tocoo"):
         coo = mat.tocoo()
-        if coo.shape != (num_constraints, lp_dim):
+        if coo.shape != (num_constraints, variable_dim):
             raise ValueError(
-                f"A_lp shape {coo.shape} != ({num_constraints}, {lp_dim})"
+                f"{label} shape {coo.shape} != "
+                f"({num_constraints}, {variable_dim})"
             )
         return (
             np.asarray(coo.row, dtype=np.int32),
@@ -95,9 +98,10 @@ def _lp_matrix_to_coo(mat, num_constraints: int, lp_dim: int):
             np.asarray(coo.data, dtype=np.float64),
         )
     arr = np.ascontiguousarray(mat, dtype=np.float64)
-    if arr.shape != (num_constraints, lp_dim):
+    if arr.shape != (num_constraints, variable_dim):
         raise ValueError(
-            f"A_lp shape {arr.shape} != ({num_constraints}, {lp_dim})"
+            f"{label} shape {arr.shape} != "
+            f"({num_constraints}, {variable_dim})"
         )
     rows, cols = np.nonzero(arr)
     return (
@@ -168,6 +172,9 @@ class Model:
         lp_dim: int = 0,
         lp_obj=None,
         A_lp: Optional[Tuple] = None,
+        free_dim: int = 0,
+        free_obj=None,
+        A_free: Optional[Tuple] = None,
     ) -> None:
         """Set the problem directly from COO triplet arrays.
 
@@ -193,6 +200,12 @@ class Model:
             LP-block objective. Required iff ``lp_dim > 0``.
         A_lp : tuple ``(constr_ind, col_ind, val)`` or None
             LP-block constraint triplets. Pass None for no LP constraints.
+        free_dim : int
+            Dimension of the optional unrestricted real block. Default 0.
+        free_obj : array-like, length ``free_dim``, or None
+            Free-block objective. Required iff ``free_dim > 0``.
+        A_free : tuple ``(constr_ind, col_ind, val)`` or None
+            Free-block constraint triplets.
 
         Raises
         ------
@@ -225,10 +238,31 @@ class Model:
             lp_col    = np.empty(0, dtype=np.int32)
             lp_val    = np.empty(0, dtype=np.float64)
 
+        if free_dim > 0:
+            if free_obj is None:
+                raise ValueError("free_obj required when free_dim > 0")
+            free_obj_arr = np.ascontiguousarray(free_obj, dtype=np.float64)
+            if free_obj_arr.size != free_dim:
+                raise ValueError(
+                    f"free_obj length {free_obj_arr.size} != free_dim {free_dim}"
+                )
+        else:
+            free_obj_arr = np.empty(0, dtype=np.float64)
+
+        if A_free is not None:
+            free_constr, free_col, free_val = _unpack_coo(
+                A_free, 3, "A_free"
+            )
+        else:
+            free_constr = np.empty(0, dtype=np.int32)
+            free_col = np.empty(0, dtype=np.int32)
+            free_val = np.empty(0, dtype=np.float64)
+
         self._problem = _core.build_problem(
             num_constraints=num_constraints,
             num_cones=num_cones,
             lp_dim=int(lp_dim),
+            free_dim=int(free_dim),
             blk_dims=block_dims_arr,
             c_cone_ind=c_cone,
             c_row_ind=c_row,
@@ -243,6 +277,10 @@ class Model:
             lp_constr_ind=lp_constr,
             lp_col_ind=lp_col,
             lp_val=lp_val,
+            free_obj=free_obj_arr,
+            free_constr_ind=free_constr,
+            free_col_ind=free_col,
+            free_val=free_val,
             b=b_arr,
         )
 
@@ -256,6 +294,9 @@ class Model:
         lp_dim: int = 0,
         lp_obj=None,
         A_lp=None,
+        free_dim: int = 0,
+        free_obj=None,
+        A_free=None,
     ) -> None:
         """Set the problem from a list of numpy/scipy matrices.
 
@@ -283,6 +324,12 @@ class Model:
         A_lp : scipy.sparse matrix or ndarray of shape ``(m, lp_dim)`` or None
             LP-block constraint matrix. Rows index constraints, columns
             index LP variables.
+        free_dim : int
+            Dimension of the optional unrestricted real block. Default 0.
+        free_obj : array-like, length ``free_dim``, or None
+            Free-block objective.
+        A_free : scipy.sparse matrix or ndarray of shape ``(m, free_dim)``
+            Free-block constraint matrix.
         """
         block_dims = list(block_dims)
         num_cones = len(block_dims)
@@ -336,8 +383,16 @@ class Model:
         # LP.
         A_lp_coo = None
         if lp_dim > 0 and A_lp is not None:
-            lp_constr, lp_col, lp_val = _lp_matrix_to_coo(A_lp, num_constraints, lp_dim)
+            lp_constr, lp_col, lp_val = _linear_matrix_to_coo(
+                A_lp, num_constraints, lp_dim, "A_lp"
+            )
             A_lp_coo = (lp_constr, lp_col, lp_val)
+        A_free_coo = None
+        if free_dim > 0 and A_free is not None:
+            free_constr, free_col, free_val = _linear_matrix_to_coo(
+                A_free, num_constraints, free_dim, "A_free"
+            )
+            A_free_coo = (free_constr, free_col, free_val)
 
         self.set_problem_coo(
             block_dims=block_dims,
@@ -347,6 +402,9 @@ class Model:
             lp_dim=lp_dim,
             lp_obj=lp_obj,
             A_lp=A_lp_coo,
+            free_dim=free_dim,
+            free_obj=free_obj,
+            A_free=A_free_coo,
         )
 
     def solve(self, **params: Any) -> Result:
@@ -409,13 +467,18 @@ class Model:
 
     @property
     def num_variables(self) -> int:
-        """Total variable count (sum of block-triangular sizes + LP block)."""
+        """Total active variable count across PSD, LP, and free blocks."""
         return self._require_problem().num_variables
 
     @property
     def lp_dim(self) -> int:
         """Dimension of the nonnegative LP block (``0`` for pure SDP)."""
         return self._require_problem().lp_dim
+
+    @property
+    def free_dim(self) -> int:
+        """Dimension of the unrestricted real block."""
+        return self._require_problem().free_dim
 
     @property
     def block_dims(self) -> List[int]:

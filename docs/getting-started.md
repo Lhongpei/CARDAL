@@ -102,8 +102,8 @@ current problem handle, while each returned `Result` remains independent.
 ```
 
 The solver prints a summary to the terminal. With `-O results`, it also writes
-the summary, low-rank primal factor, per-cone rank list, and dual solution to
-`results`.
+the summary, low-rank PSD factor, optional LP/free primal vectors, per-cone
+rank list, and dual solution to `results`.
 
 Run the built-in help to inspect the executable's accepted options:
 

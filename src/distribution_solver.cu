@@ -382,6 +382,10 @@ static void preprocess_distributed_solver(cardal_sdp_solver_state_t *state) {
       CUDA_CHECK(cudaMemset(state->lp_objective_vector, 0,
                             state->lp_dim * sizeof(double)));
     }
+    if (state->free_dim > 0 && state->free_objective_vector != NULL) {
+      CUDA_CHECK(cudaMemset(state->free_objective_vector, 0,
+                            state->free_dim * sizeof(double)));
+    }
   }
 }
 

@@ -18,10 +18,17 @@ The format follows [Keep a Changelog], and this project adheres to
   problem.
 - Exposed preconditioning and scaling controls through the public C and Python
   APIs.
+- Added native unrestricted real variables across the solver core, SeDuMi and
+  SDPT3 readers, C API, and Python API.
+- Added explicit C, Python, and CLI result outputs for nonnegative LP primal
+  variables.
 
 ### Changed
 
 - Standardized CLI long-option names on hyphen-separated spelling.
+- MAT readers now reject unsupported SeDuMi and SDPT3 cones, complex data,
+  nonlinear barrier objectives, and low-rank SDPT3 encodings instead of
+  silently dropping them.
 
 ## [0.1.0] - 2026-07-22
 
