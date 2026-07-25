@@ -14,7 +14,7 @@ CARDAL solves standard-form semidefinite programs with block-diagonal PSD
 variables, an optional nonnegative LP block, and optional unrestricted real
 variables:
 
-$$
+```math
 \begin{aligned}
 \min \quad &
   \sum_{c=1}^p \langle C_c, X_c\rangle
@@ -28,7 +28,7 @@ $$
 & X_c \succeq 0,\quad x_{\mathrm{LP}}\ge 0,\quad
   x_{\mathrm{free}}\in\mathbb{R}^{d_{\mathrm{free}}}.
 \end{aligned}
-$$
+```
 
 $C$ and each $A_i$ are symmetric block-diagonal matrices. Every matrix is stored by its **lower triangle only**, and off-diagonal entries are **not** implicitly doubled &mdash; the same convention applies to the Python API. Each PSD block $X_c \in \mathbb{R}^{n_c \times n_c}$ is stored as a factor $V_c \in \mathbb{R}^{n_c \times r_c}$ with $X_c = V_c V_c^\top$.
 
