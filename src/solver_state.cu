@@ -373,9 +373,13 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
   // Initialize the per-state CUDA stream pool shared by all cones.
   state->cone_stream_pool_size = (int)(sizeof(state->cone_stream_pool) /
                                        sizeof(state->cone_stream_pool[0]));
+  CUDA_CHECK(cudaEventCreateWithFlags(&state->default_stream_ready_event,
+                                       cudaEventDisableTiming));
   for (int i = 0; i < state->cone_stream_pool_size; i++) {
     CUDA_CHECK(cudaStreamCreateWithFlags(&state->cone_stream_pool[i],
                                          cudaStreamNonBlocking));
+    CUDA_CHECK(cudaEventCreateWithFlags(&state->cone_stream_done_events[i],
+                                         cudaEventDisableTiming));
   }
 
   // Per-cone p2 accumulator buffers for COMPUTE_EXACT_STEP_SIZE.
@@ -1101,6 +1105,15 @@ void build_cone_batches(cardal_sdp_solver_state_t *state) {
   free(dim_seen);
   free(indexes);
   free(counts);
+  state->active_cone_stream_mask = 0;
+  for (int batch_idx = 0; batch_idx < state->n_batches; batch_idx++) {
+    int leader = state->batch_leaders[batch_idx];
+    block_low_rank_state_t *batch = state->block_low_rank_state[leader];
+    if (batch->kind == CONE_BATCH_KIND_PERCONE) {
+      int stream_idx = leader % state->cone_stream_pool_size;
+      state->active_cone_stream_mask |= 1u << stream_idx;
+    }
+  }
 #undef IS_CUSTOM_BUCKET
 }
 
@@ -1695,7 +1708,11 @@ void free_solver_state(cardal_sdp_solver_state_t *state) {
     CUDA_CHECK(cudaFree(state->right_hand_side));
 
   // ---- Cone stream pool ----
+  if (state->default_stream_ready_event)
+    CUDA_CHECK(cudaEventDestroy(state->default_stream_ready_event));
   for (int i = 0; i < state->cone_stream_pool_size; i++) {
+    if (state->cone_stream_done_events[i])
+      CUDA_CHECK(cudaEventDestroy(state->cone_stream_done_events[i]));
     if (state->cone_stream_pool[i])
       CUDA_CHECK(cudaStreamDestroy(state->cone_stream_pool[i]));
   }

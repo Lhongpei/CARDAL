@@ -516,7 +516,7 @@ static basic_sdp_t *read_sedumi_mat(mat_t *matfp, matvar_t *root_struct) {
   int m =
       (int)(b_var->dims[0] > b_var->dims[1] ? b_var->dims[0] : b_var->dims[1]);
 
-  basic_sdp_t *sdp = (basic_sdp_t *)calloc(1, sizeof(basic_sdp_t));
+  basic_sdp_t *sdp = alloc_basic_sdp();
   sdp->m = m;
   sdp->n_cones = n_cones;
   sdp->lp_dim = K_l;
@@ -900,7 +900,7 @@ static basic_sdp_t *read_sdpt3_mat(mat_t *matfp, matvar_t *root_struct) {
     }
   }
 
-  basic_sdp_t *sdp = (basic_sdp_t *)calloc(1, sizeof(basic_sdp_t));
+  basic_sdp_t *sdp = alloc_basic_sdp();
   sdp->m = m;
   sdp->n_cones = total_n_cones;
   sdp->lp_dim = total_lp_dim;

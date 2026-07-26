@@ -265,6 +265,10 @@ void *safe_realloc(void *ptr, size_t new_size) {
   return tmp;
 }
 
+basic_sdp_t *alloc_basic_sdp(void) {
+  return (basic_sdp_t *)safe_calloc(1, sizeof(basic_sdp_t));
+}
+
 void *safe_memcpy(void *dest, const void *src, size_t n) {
   if (n == 0) {
     return dest;

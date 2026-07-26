@@ -25,6 +25,15 @@ The format follows [Keep a Changelog], and this project adheres to
   cone-distributed MPI grids using one globally synchronized escape direction.
 - Made low-rank objective inclusion explicit in slack and Hessian actions, and
   added a true penalty-only update for custom cone batches.
+- Replaced host-blocking cone-stream barriers with CUDA event dependencies and
+  kept the L-BFGS two-loop recursion scalars on the GPU, including NCCL
+  reductions for distributed rank and cone grids.
+
+### Fixed
+
+- Zero-initialize every basic SDP model so parsers and generators without LP,
+  free-variable, or low-rank blocks cannot expose uninitialized optional
+  fields during compression or cleanup.
 
 ## [0.1.1] - 2026-07-25
 

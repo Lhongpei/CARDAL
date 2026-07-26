@@ -17,7 +17,7 @@ basic_sdp_t *generate_order_sdp(int n_size, int k) {
     int num_trace_constr = k - 1; // 
     int m_total = num_translation_constr + num_trace_constr; // 
 
-    basic_sdp_t *input = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
+    basic_sdp_t *input = alloc_basic_sdp();
     input->m = m_total;
     input->n_cones = num_blocks;
     

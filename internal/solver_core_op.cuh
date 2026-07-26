@@ -1049,7 +1049,7 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
   double alpha_spmm = 2.0;
   double beta_spmm = 0.0;
 
-  CUDA_CHECK(cudaStreamSynchronize(0));
+  make_cone_streams_wait_for_default(state);
 
   // Per-batch dispatch. CUSTOM batches do batched memcpy+add_Ay+SpMM on stream
   // 0
@@ -1098,8 +1098,7 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
   }
 
   CUSPARSE_CHECK(cusparseSetStream(state->sparse_handle, 0));
-  for (int i = 0; i < state->cone_stream_pool_size; i++)
-    CUDA_CHECK(cudaStreamSynchronize(state->cone_stream_pool[i]));
+  make_default_wait_for_cone_streams(state);
 
   CUBLAS_CHECK(cublasSetStream(state->blas_handle, 0));
   for (int bi = 0; bi < state->n_batches; bi++) {
@@ -1145,6 +1144,7 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
 static void COMPUTE_PRIMAL_RESIDUAL(cardal_sdp_solver_state_t *state) {
   CUDA_CHECK(cudaMemset(state->primal_solution, 0,
                         state->n_active_vars * sizeof(double)));
+  make_cone_streams_wait_for_default(state);
 
   for (int bi = 0; bi < state->n_batches; bi++) {
     const block_low_rank_state_t *batch =
@@ -1158,8 +1158,7 @@ static void COMPUTE_PRIMAL_RESIDUAL(cardal_sdp_solver_state_t *state) {
   }
 
   CUSPARSE_CHECK(cusparseSetStream(state->sparse_handle, 0));
-  for (int i = 0; i < state->cone_stream_pool_size; i++)
-    CUDA_CHECK(cudaStreamSynchronize(state->cone_stream_pool[i]));
+  make_default_wait_for_cone_streams(state);
 
   if (state->lp_dim > 0) {
     int blocks = (state->lp_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
@@ -1564,6 +1563,7 @@ COMPUTE_EXACT_STEP_SIZE_TAUMAX(cardal_sdp_solver_state_t *state,
                         state->n_active_vars * sizeof(double)));
   CUDA_CHECK(cudaMemset(state->q1, 0, state->num_constraints * sizeof(double)));
   CUDA_CHECK(cudaMemset(state->q2, 0, state->num_constraints * sizeof(double)));
+  make_cone_streams_wait_for_default(state);
 
   for (int bi = 0; bi < state->n_batches; bi++) {
     const block_low_rank_state_t *batch =
@@ -1582,8 +1582,7 @@ COMPUTE_EXACT_STEP_SIZE_TAUMAX(cardal_sdp_solver_state_t *state,
       compute_RD_DD_block(state->batch_leaders[bi], state);
     }
   }
-  for (int i = 0; i < state->cone_stream_pool_size; i++)
-    CUDA_CHECK(cudaStreamSynchronize(state->cone_stream_pool[i]));
+  make_default_wait_for_cone_streams(state);
   CUSPARSE_CHECK(cusparseSetStream(state->sparse_handle, 0));
   CUBLAS_CHECK(cublasSetStream(state->blas_handle, 0));
 

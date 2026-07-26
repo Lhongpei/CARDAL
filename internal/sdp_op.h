@@ -48,6 +48,8 @@ __global__ void compute_lp_line_search_kernel(const double *__restrict__ v,
                                               double *__restrict__ primal_d,
                                               int lp_dim);
 void compute_RR_block(int blk_idx, cardal_sdp_solver_state_t *state);
+void make_cone_streams_wait_for_default(cardal_sdp_solver_state_t *state);
+void make_default_wait_for_cone_streams(cardal_sdp_solver_state_t *state);
 void update_dual_slack_S(cardal_sdp_solver_state_t *state);
 void update_al_gradient_S(cardal_sdp_solver_state_t *state);
 void update_penalty_only_S(cardal_sdp_solver_state_t *state);

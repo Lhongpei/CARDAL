@@ -645,7 +645,7 @@ static void update_S_impl(cardal_sdp_solver_state_t *state,
       state->matAt, state->vec_q1, &beta_spmv, state->vec_dual_prod, CUDA_R_64F,
       CUSPARSE_SPMV_CSR_ALG2, state->dual_spmv_buffer));
 
-  CUDA_CHECK(cudaStreamSynchronize(0));
+  make_cone_streams_wait_for_default(state);
 
   // 3. Per-batch: seed matSpS then add Ay contribution.
   for (int bi = 0; bi < state->n_batches; bi++) {
@@ -696,8 +696,33 @@ static void update_S_impl(cardal_sdp_solver_state_t *state,
     }
   }
   CUSPARSE_CHECK(cusparseSetStream(state->sparse_handle, 0));
-  for (int i = 0; i < state->cone_stream_pool_size; i++)
-    CUDA_CHECK(cudaStreamSynchronize(state->cone_stream_pool[i]));
+  make_default_wait_for_cone_streams(state);
+}
+
+void make_cone_streams_wait_for_default(cardal_sdp_solver_state_t *state) {
+  unsigned int mask = state->active_cone_stream_mask;
+  if (mask == 0)
+    return;
+
+  CUDA_CHECK(cudaEventRecord(state->default_stream_ready_event, 0));
+  for (int i = 0; i < state->cone_stream_pool_size; i++) {
+    if ((mask & (1u << i)) != 0) {
+      CUDA_CHECK(cudaStreamWaitEvent(state->cone_stream_pool[i],
+                                     state->default_stream_ready_event, 0));
+    }
+  }
+}
+
+void make_default_wait_for_cone_streams(cardal_sdp_solver_state_t *state) {
+  unsigned int mask = state->active_cone_stream_mask;
+  for (int i = 0; i < state->cone_stream_pool_size; i++) {
+    if ((mask & (1u << i)) != 0) {
+      CUDA_CHECK(cudaEventRecord(state->cone_stream_done_events[i],
+                                 state->cone_stream_pool[i]));
+      CUDA_CHECK(
+          cudaStreamWaitEvent(0, state->cone_stream_done_events[i], 0));
+    }
+  }
 }
 
 void update_dual_slack_S(cardal_sdp_solver_state_t *state) {

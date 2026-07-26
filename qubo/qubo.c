@@ -455,7 +455,7 @@ basic_sdp_t *qubo_to_sdp_chordal(const qubo_problem_t *q) {
     }
   }
 
-  basic_sdp_t *sdp = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
+  basic_sdp_t *sdp = alloc_basic_sdp();
   sdp->n_cones = K;
   sdp->blk_dims = (int *)safe_malloc((size_t)K * sizeof(int));
   for (int k = 0; k < K; k++)
@@ -720,7 +720,7 @@ basic_sdp_t *qubo_to_sdp_dense(const qubo_problem_t *q) {
   int n = q->n;
   LOG_DBG("[QUBO->SDP/dense] n=%d, single cone of size %d\n", n, n + 1);
 
-  basic_sdp_t *sdp = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
+  basic_sdp_t *sdp = alloc_basic_sdp();
   sdp->n_cones = 1;
   sdp->blk_dims = (int *)safe_malloc(sizeof(int));
   sdp->blk_dims[0] = n + 1;

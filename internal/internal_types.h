@@ -309,7 +309,10 @@ typedef struct {
   grid_context_t *grid_context;
 
   cudaStream_t cone_stream_pool[CARDAL_CONE_STREAM_POOL_SIZE];
+  cudaEvent_t default_stream_ready_event;
+  cudaEvent_t cone_stream_done_events[CARDAL_CONE_STREAM_POOL_SIZE];
   int cone_stream_pool_size;
+  unsigned int active_cone_stream_mask;
 
   double *d_p2_per_cone;
   double *h_p2_per_cone;

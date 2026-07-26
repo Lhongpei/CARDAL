@@ -83,7 +83,7 @@ static inline double next_double(fast_scanner_t *s) {
 
 basic_sdp_t *parse_sdpa_from_memory(char *data, size_t size) {
   fast_scanner_t s = {data, data + size};
-  basic_sdp_t *sdp = (basic_sdp_t *)calloc(1, sizeof(basic_sdp_t));
+  basic_sdp_t *sdp = alloc_basic_sdp();
 
   sdp->m = next_int(&s);
   int raw_n_blocks = next_int(&s);

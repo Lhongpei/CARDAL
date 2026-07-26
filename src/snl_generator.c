@@ -92,7 +92,7 @@ basic_sdp_t *generate_snl_sdp(int n, int num_anchors, int d, double radio_range,
   LOG_DBG("  -> Total constraints (m): %d\n", total_m);
   LOG_DBG("  -> Allocating %d non-zeros...\n", total_nnz);
 
-  basic_sdp_t *input = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
+  basic_sdp_t *input = alloc_basic_sdp();
   input->m = total_m;
   input->n_cones = 1;
   input->blk_dims = (int *)safe_malloc(sizeof(int));

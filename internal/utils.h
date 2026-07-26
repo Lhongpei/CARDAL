@@ -94,6 +94,9 @@ void *safe_calloc(size_t num, size_t size);
 void *safe_realloc(void *ptr, size_t new_size);
 
 void *safe_memcpy(void *dest, const void *src, size_t n);
+
+basic_sdp_t *alloc_basic_sdp(void);
+
 typedef struct {
   int row;
   int col;

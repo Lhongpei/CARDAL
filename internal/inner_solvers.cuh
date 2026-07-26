@@ -51,6 +51,60 @@
 #define GLOBAL_NORM(state, local_norm, global_norm) (global_norm) = (local_norm)
 #endif
 
+static __global__ void lbfgs_store_reciprocal_kernel(const double *value,
+                                                     double *reciprocal) {
+  if (threadIdx.x == 0 && blockIdx.x == 0)
+    *reciprocal = 1.0 / *value;
+}
+
+static __global__ void lbfgs_alpha_kernel(const double *rho, const double *sq,
+                                          double *alpha,
+                                          double *negative_alpha) {
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    *alpha = *rho * *sq;
+    *negative_alpha = -*alpha;
+  }
+}
+
+static __global__ void lbfgs_gamma_kernel(const double *sy, const double *yy,
+                                          double *gamma) {
+  if (threadIdx.x == 0 && blockIdx.x == 0)
+    *gamma = (*yy > 1e-16) ? *sy / *yy : 1.0;
+}
+
+static __global__ void lbfgs_factor_kernel(const double *rho,
+                                           const double *yz,
+                                           const double *alpha, double *beta,
+                                           double *factor) {
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    *beta = *rho * *yz;
+    *factor = *alpha - *beta;
+  }
+}
+
+static __global__ void lbfgs_inverse_norm_kernel(const double *norm_sq,
+                                                 double *inverse_norm) {
+  if (threadIdx.x == 0 && blockIdx.x == 0)
+    *inverse_norm = (*norm_sq > 1e-24) ? rsqrt(*norm_sq) : 1.0;
+}
+
+static inline void
+LBFGS_GLOBAL_SUM_DEVICE(cardal_sdp_solver_state_t *state, double *d_value) {
+#ifdef IS_DISTRIBUTED
+  if (state->grid_context->dims[1] > 1) {
+    NCCL_CHECK(ncclAllReduce(d_value, d_value, 1, ncclDouble, ncclSum,
+                             state->grid_context->nccl_rank, 0));
+  }
+  if (state->grid_context->dims[2] > 1) {
+    NCCL_CHECK(ncclAllReduce(d_value, d_value, 1, ncclDouble, ncclSum,
+                             state->grid_context->nccl_cone, 0));
+  }
+#else
+  (void)state;
+  (void)d_value;
+#endif
+}
+
 static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
                                     double tolerance) {
   int len = state->length_low_rank_solution;
@@ -66,10 +120,9 @@ static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
   double *d_y = state->d_lbfgs_y;
   double *d_q = state->d_lbfgs_q;
   double *d_z = state->d_lbfgs_z;
+  double *d_rho = state->d_lbfgs_rho;
+  double *d_alpha = state->d_lbfgs_alpha;
   double *d_scr = state->d_lbfgs_scratch;
-
-  double rho[64];
-  double alpha[64];
 
   int head = 0;
   int history_size = 0;
@@ -84,12 +137,17 @@ static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
 
   state->lbfgs_exit_reason = LBFGS_MAX_ITERS;
 
-  #define DEVICE_DOT_TO_HOST(VEC_A, VEC_B, SLOT, HOST_VAR)                      \
+  #define DEVICE_GLOBAL_DOT(VEC_A, VEC_B, SLOT)                                \
     do {                                                                       \
       CUBLAS_CHECK(cublasSetPointerMode(state->blas_handle,                    \
                                         CUBLAS_POINTER_MODE_DEVICE));          \
       CUBLAS_CHECK(cublasDdot(state->blas_handle, len, (VEC_A), 1, (VEC_B), 1, \
                               d_scr + (SLOT)));                                \
+      LBFGS_GLOBAL_SUM_DEVICE(state, d_scr + (SLOT));                          \
+    } while (0)
+  #define DEVICE_DOT_TO_HOST(VEC_A, VEC_B, SLOT, HOST_VAR)                     \
+    do {                                                                       \
+      DEVICE_GLOBAL_DOT((VEC_A), (VEC_B), (SLOT));                            \
       CUBLAS_CHECK(cublasSetPointerMode(state->blas_handle,                    \
                                         CUBLAS_POINTER_MODE_HOST));            \
       CUDA_CHECK(cudaMemcpy(&(HOST_VAR), d_scr + (SLOT), sizeof(double),       \
@@ -132,9 +190,8 @@ static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
       CUBLAS_CHECK(cublasDaxpy(state->blas_handle, len, &minus_one, d_Grad_old,
                                1, d_y, 1));
 
-      double sy_local = 0.0, sy = 0.0;
-      DEVICE_DOT_TO_HOST(d_s, d_y, LBFGS_SCR_SY, sy_local);
-      GLOBAL_DOT(state, sy_local, sy);
+      double sy = 0.0;
+      DEVICE_DOT_TO_HOST(d_s, d_y, LBFGS_SCR_SY, sy);
 
       if (sy > 1e-10) {
         double *s_ptr = d_S + head * len;
@@ -142,7 +199,8 @@ static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
         CUBLAS_CHECK(cublasDcopy(state->blas_handle, len, d_s, 1, s_ptr, 1));
         CUBLAS_CHECK(cublasDcopy(state->blas_handle, len, d_y, 1, y_ptr, 1));
 
-        rho[head] = 1.0 / sy;
+        lbfgs_store_reciprocal_kernel<<<1, 1>>>(d_scr + LBFGS_SCR_SY,
+                                                d_rho + head);
         head = (head + 1) % m_lbfgs;
         if (history_size < m_lbfgs)
           history_size++;
@@ -167,55 +225,45 @@ static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
         double *s_ptr = d_S + idx * len;
         double *y_ptr = d_Y + idx * len;
 
-        double sq_local = 0.0, sq = 0.0;
-        DEVICE_DOT_TO_HOST(s_ptr, d_q, LBFGS_SCR_SQ, sq_local);
-        GLOBAL_DOT(state, sq_local, sq);
-
-        alpha[idx] = rho[idx] * sq;
-        double minus_a = -alpha[idx];
-        CUBLAS_CHECK(
-            cublasDaxpy(state->blas_handle, len, &minus_a, y_ptr, 1, d_q, 1));
+        DEVICE_GLOBAL_DOT(s_ptr, d_q, LBFGS_SCR_SQ);
+        lbfgs_alpha_kernel<<<1, 1>>>(
+            d_rho + idx, d_scr + LBFGS_SCR_SQ, d_alpha + idx,
+            d_scr + LBFGS_SCR_NEG_ALPHA);
+        CUBLAS_CHECK(cublasDaxpy(state->blas_handle, len,
+                                 d_scr + LBFGS_SCR_NEG_ALPHA, y_ptr, 1, d_q,
+                                 1));
       }
 
       int latest_idx = (head - 1 + m_lbfgs) % m_lbfgs;
       double *s_latest = d_S + latest_idx * len;
       double *y_latest = d_Y + latest_idx * len;
 
-      double yy_local = 0.0, yy = 0.0;
-      double sy_latest_local = 0.0, sy_latest = 0.0;
-      DEVICE_DOT_TO_HOST(y_latest, y_latest, LBFGS_SCR_YY, yy_local);
-      GLOBAL_DOT(state, yy_local, yy);
-      DEVICE_DOT_TO_HOST(s_latest, y_latest, LBFGS_SCR_SY_LATEST,
-                         sy_latest_local);
-      GLOBAL_DOT(state, sy_latest_local, sy_latest);
-
-      double gamma = 1.0;
-      if (yy > 1e-16) {
-        gamma = sy_latest / yy;
-      }
+      DEVICE_GLOBAL_DOT(y_latest, y_latest, LBFGS_SCR_YY);
+      DEVICE_GLOBAL_DOT(s_latest, y_latest, LBFGS_SCR_SY_LATEST);
+      lbfgs_gamma_kernel<<<1, 1>>>(d_scr + LBFGS_SCR_SY_LATEST,
+                                   d_scr + LBFGS_SCR_YY,
+                                   d_scr + LBFGS_SCR_GAMMA);
       CUBLAS_CHECK(cublasDcopy(state->blas_handle, len, d_q, 1, d_z, 1));
-      CUBLAS_CHECK(cublasDscal(state->blas_handle, len, &gamma, d_z, 1));
+      CUBLAS_CHECK(cublasDscal(state->blas_handle, len,
+                               d_scr + LBFGS_SCR_GAMMA, d_z, 1));
 
       for (int i = history_size - 1; i >= 0; i--) {
         int idx = (head - 1 - i + m_lbfgs) % m_lbfgs;
         double *s_ptr = d_S + idx * len;
         double *y_ptr = d_Y + idx * len;
 
-        double yz_local = 0.0, yz = 0.0;
-        DEVICE_DOT_TO_HOST(y_ptr, d_z, LBFGS_SCR_YZ, yz_local);
-        GLOBAL_DOT(state, yz_local, yz);
-
-        double beta = rho[idx] * yz;
-        double factor = alpha[idx] - beta;
-        CUBLAS_CHECK(
-            cublasDaxpy(state->blas_handle, len, &factor, s_ptr, 1, d_z, 1));
+        DEVICE_GLOBAL_DOT(y_ptr, d_z, LBFGS_SCR_YZ);
+        lbfgs_factor_kernel<<<1, 1>>>(
+            d_rho + idx, d_scr + LBFGS_SCR_YZ, d_alpha + idx,
+            d_scr + LBFGS_SCR_BETA, d_scr + LBFGS_SCR_FACTOR);
+        CUBLAS_CHECK(cublasDaxpy(state->blas_handle, len,
+                                 d_scr + LBFGS_SCR_FACTOR, s_ptr, 1, d_z, 1));
       }
     }
 
-    double dir_grad_dot_local = 0.0, dir_grad_dot = 0.0;
-    DEVICE_DOT_TO_HOST(state->low_rank_gradient, d_z, LBFGS_SCR_DIR_GRAD_DOT,
-                       dir_grad_dot_local);
-    GLOBAL_DOT(state, dir_grad_dot_local, dir_grad_dot);
+    double dir_grad_dot = 0.0;
+    DEVICE_DOT_TO_HOST(state->low_rank_gradient, d_z,
+                       LBFGS_SCR_DIR_GRAD_DOT, dir_grad_dot);
 
     double minus_one = -1.0;
     if (dir_grad_dot > 1e-12) {
@@ -233,15 +281,13 @@ static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
       head = 0;
     }
 
-    double dir_norm_local = 0.0, dir_norm = 0.0;
-    DEVICE_NRM2_TO_HOST(state->low_rank_direction, LBFGS_SCR_DIR_NORM,
-                        dir_norm_local);
-    GLOBAL_NORM(state, dir_norm_local, dir_norm);
-    if (dir_norm > 1e-12) {
-      double inv_norm = 1.0 / dir_norm;
-      CUBLAS_CHECK(cublasDscal(state->blas_handle, len, &inv_norm,
-                               state->low_rank_direction, 1));
-    }
+    DEVICE_GLOBAL_DOT(state->low_rank_direction, state->low_rank_direction,
+                      LBFGS_SCR_DIR_NORM);
+    lbfgs_inverse_norm_kernel<<<1, 1>>>(d_scr + LBFGS_SCR_DIR_NORM,
+                                       d_scr + LBFGS_SCR_DIR_INV_NORM);
+    CUBLAS_CHECK(cublasDscal(state->blas_handle, len,
+                             d_scr + LBFGS_SCR_DIR_INV_NORM,
+                             state->low_rank_direction, 1));
 
     double optimal_tau = COMPUTE_EXACT_STEP_SIZE(state);
     if (fabs(optimal_tau) < 1e-8) {
@@ -256,6 +302,7 @@ static inline int SOLVE_INNER_LBFGS(cardal_sdp_solver_state_t *state,
 
   CUBLAS_CHECK(cublasSetPointerMode(state->blas_handle, saved_mode));
 
+  #undef DEVICE_GLOBAL_DOT
   #undef DEVICE_DOT_TO_HOST
   #undef DEVICE_NRM2_TO_HOST
   return inner;

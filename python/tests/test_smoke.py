@@ -82,6 +82,23 @@ def test_read_file_missing_path_raises():
         Model.read_file("/definitely/not/a/cardal/problem.dat-s")
 
 
+def test_read_pdsdp_npz_without_optional_blocks(tmp_path):
+    path = tmp_path / "minimal.npz"
+    np.savez(
+        path,
+        tI_size=np.array([2], dtype=np.int64),
+        b=np.array([1.0], dtype=np.float64),
+        A=np.array([[0, 0, 0, 0, 1.0]], dtype=np.float64),
+        C=np.array([[0, 0, 0, 1.0]], dtype=np.float64),
+    )
+
+    model = Model.read_file(path)
+    assert model.num_constraints == 1
+    assert model.num_cones == 1
+    assert model.lp_dim == 0
+    assert model.free_dim == 0
+
+
 @pytest.mark.skipif(not os.path.exists(FE4S4),
                     reason=FE4S4_SKIP_REASON)
 def test_load_file_replaces_problem():

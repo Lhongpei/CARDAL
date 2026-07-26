@@ -24,7 +24,7 @@ basic_sdp_t *generate_maxcut_sdp_huge(int n, double edge_prob) {
 
   rng_state = 42; //(uint64_t)time(NULL) ^ 0xDEADBEEFCAFEBABULL;
 
-  basic_sdp_t *input = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
+  basic_sdp_t *input = alloc_basic_sdp();
   input->m = n;
   input->n_cones = 1;
   input->blk_dims = (int *)safe_malloc(sizeof(int));

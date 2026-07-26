@@ -314,8 +314,7 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
     }
   }
 
-  basic_sdp_t *basic = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
-  memset(basic, 0, sizeof(*basic));
+  basic_sdp_t *basic = alloc_basic_sdp();
   basic->m = data->num_constraints;
   basic->n_cones = data->num_cones;
   basic->lp_dim = data->lp_dim;

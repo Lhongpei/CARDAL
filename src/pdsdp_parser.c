@@ -268,7 +268,7 @@ basic_sdp_t *read_pdsdp_npz(const char *filename) {
   }
 
   // ---- Assemble basic_sdp_t ----
-  basic_sdp_t *sdp = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
+  basic_sdp_t *sdp = alloc_basic_sdp();
   sdp->m = m;
   sdp->n_cones = n_cones;
   sdp->blk_dims = blk_dims;
