@@ -178,3 +178,33 @@ def test_multiple_percone_pure_low_rank_cones():
     assert result.status is cardal.OPTIMAL
     assert result.primal_objective == pytest.approx(-2.0, abs=2e-4)
     assert result.rel_primal_residual < 1e-5
+
+
+def test_batched_fixed_rank_curvature_path():
+    num_cones = 32
+    identity = np.eye(3)
+    model = cardal.Model()
+    model.set_problem(
+        block_dims=[3] * num_cones,
+        b=[float(num_cones)],
+        C=[
+            cardal.LowRank(identity, weights=[-1.0, 0.2, 0.4]) for _ in range(num_cones)
+        ],
+        A=[[cardal.LowRank(identity) for _ in range(num_cones)]],
+    )
+    params = dict(SOLVE_PARAMS)
+    params.update(
+        iteration_limit=30,
+        inner_iterations_limit=20,
+        initial_rank=1,
+        max_rank=1,
+        l_inf_ruiz_iterations=0,
+        pock_chambolle_rescaling=False,
+        bound_objective_rescaling=False,
+    )
+
+    result = model.solve(**params)
+
+    assert result.status is cardal.OPTIMAL
+    assert result.primal_objective == pytest.approx(-num_cones, abs=5e-3)
+    assert result.rel_primal_residual < 1e-4

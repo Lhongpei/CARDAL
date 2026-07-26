@@ -848,7 +848,7 @@ static void compute_projected_slack(cardal_sdp_solver_state_t *state,
   for (int j = 0; j < r; j++) {
     double *vj = const_cast<double *>(d_V + (size_t)j * dim);
     CUSPARSE_CHECK(cusparseDnVecSetValues(vec_in, vj));
-    unscaled_dual_spmv(state, blk, vj, d_out, d_scratch, vec_in, vec_out,
+    unscaled_dual_spmv(state, blk, vj, d_out, d_scratch, 1, vec_in, vec_out,
                        buffer);
 #ifdef USE_MPI
     if (state->grid_context != NULL && state->grid_context->dims[0] > 1) {

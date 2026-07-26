@@ -50,7 +50,6 @@ __global__ void compute_lp_line_search_kernel(const double *__restrict__ v,
 void compute_RR_block(int blk_idx, cardal_sdp_solver_state_t *state);
 void update_dual_slack_S(cardal_sdp_solver_state_t *state);
 void update_al_gradient_S(cardal_sdp_solver_state_t *state);
-// PERCONE only.
 void update_penalty_only_S(cardal_sdp_solver_state_t *state);
 double compute_penalty_perturbation_fnorm(cardal_sdp_solver_state_t *state);
 // PERCONE only, single-GPU.
@@ -85,6 +84,7 @@ elementwise_multiply_scaled_kernel(double *__restrict__ inout,
 void unscaled_dual_spmv(cardal_sdp_solver_state_t *state,
                         block_low_rank_state_t *blk, double *d_in,
                         double *d_out, double *d_scratch,
+                        int include_low_rank_objective,
                         cusparseDnVecDescr_t vec_in,
                         cusparseDnVecDescr_t vec_out, void *dBuffer);
 

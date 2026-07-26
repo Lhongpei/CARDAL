@@ -363,7 +363,7 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
   for (int i = 0; i < 150; i++) {
     phase1_iters++;
 
-    unscaled_dual_spmv(state, blk, d_q, d_Sq, d_v, vec_q, vec_Sq, dBuffer);
+    unscaled_dual_spmv(state, blk, d_q, d_Sq, d_v, 1, vec_q, vec_Sq, dBuffer);
 
 #ifdef IS_DISTRIBUTED
     NCCL_CHECK(ncclAllReduce(d_Sq, d_Sq, dim, ncclDouble, ncclSum,
@@ -408,7 +408,7 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
   double prev_lambda_B = 0.0;
 
   for (int iter = 0; iter < MAX_ITER_PHASE2; iter++) {
-    unscaled_dual_spmv(state, blk, d_q, d_Sq, d_v, vec_q, vec_Sq, dBuffer);
+    unscaled_dual_spmv(state, blk, d_q, d_Sq, d_v, 1, vec_q, vec_Sq, dBuffer);
 
 #ifdef IS_DISTRIBUTED
     NCCL_CHECK(ncclAllReduce(d_Sq, d_Sq, dim, ncclDouble, ncclSum,
@@ -438,7 +438,7 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
   }
 
   double min_eigval = 0.0;
-  unscaled_dual_spmv(state, blk, d_q, d_Sq, d_v, vec_q, vec_Sq, dBuffer);
+  unscaled_dual_spmv(state, blk, d_q, d_Sq, d_v, 1, vec_q, vec_Sq, dBuffer);
 
 #ifdef IS_DISTRIBUTED
   NCCL_CHECK(ncclAllReduce(d_Sq, d_Sq, dim, ncclDouble, ncclSum,
@@ -489,7 +489,8 @@ static inline void COMPUTE_BM_HVP_PERCONE(cardal_sdp_solver_state_t *state,
                                           cusparseDnMatDescr_t matV_descr,
                                           cusparseDnMatDescr_t matHV_descr,
                                           double *d_V, double *d_HV,
-                                          double *d_saved_S_val) {
+                                          double *d_saved_S_val,
+                                          int include_low_rank_objective) {
 #ifndef IS_DISTRIBUTED
   (void)d_HV; // Only referenced from nccl_row/nccl_rank Allreduce calls
               // under IS_DISTRIBUTED; unused in single-GPU builds.
@@ -522,8 +523,8 @@ static inline void COMPUTE_BM_HVP_PERCONE(cardal_sdp_solver_state_t *state,
   }
   /* Term 1: 2 (C + A^*q) V. */
   low_rank_add_operator_times_matrix(state, blk, state->q1,
-                                     state->low_rank_slack_include_objective,
-                                     d_V, blk->rank, 2.0, d_HV);
+                                     include_low_rank_objective, d_V, blk->rank,
+                                     2.0, d_HV);
 
   /* q2 = A(R V^T + V R^T). */
   CUDA_CHECK(cudaMemsetAsync(
@@ -621,7 +622,7 @@ static inline void COMPUTE_BM_HVP_PERCONE(cardal_sdp_solver_state_t *state,
 #endif
 }
 
-// Lanczos on BM HVP; out_V_neg owned by caller if non-NULL. PERCONE only.
+// Lanczos on one cone's BM HVP; out_V_neg is owned by the caller if non-NULL.
 #ifndef LANCZOS_K
 #define LANCZOS_K 30
 #endif
@@ -636,8 +637,6 @@ static inline int FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state,
   *out_V_neg = NULL;
 
   block_low_rank_state_t *blk = state->block_low_rank_state[blk_idx];
-  if (blk->kind == CONE_BATCH_KIND_CUSTOM)
-    return 0; // batched: skip
   int dim = blk->dim;
   int r = blk->rank;
   if (r <= 0 || dim <= 0)
@@ -721,7 +720,7 @@ static inline int FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state,
 
     // d_v = H[q_j]
     COMPUTE_BM_HVP_PERCONE(state, blk, matV_descr, matHV_descr, q_j, d_v,
-                           d_saved_S);
+                           d_saved_S, 1);
 
     if (j > 0) {
       double mb = -beta_arr[j];
@@ -891,7 +890,8 @@ static inline int COMPUTE_NEGATIVE_EIGEN_LANCZOS(
     double *q_j = d_Q + j * dim;
     CUSPARSE_CHECK(cusparseDnVecSetValues(vec_q, q_j));
 
-    unscaled_dual_spmv(state, blk, q_j, d_v, d_qscratch, vec_q, vec_v, dBuffer);
+    unscaled_dual_spmv(state, blk, q_j, d_v, d_qscratch, 1, vec_q, vec_v,
+                       dBuffer);
 
 #ifdef IS_DISTRIBUTED
     NCCL_CHECK(ncclAllReduce(d_v, d_v, dim, ncclDouble, ncclSum,
@@ -1746,77 +1746,155 @@ COMPUTE_EXACT_STEP_SIZE_TAUMAX(cardal_sdp_solver_state_t *state,
   return tau_h;
 }
 
-// Post-LBFGS gate; for each PERCONE block runs FIND_AL_NEGATIVE_CURVATURE,
-// sign-aligns V_neg against gradient, applies R += tau*V_neg. Returns
-// number of blocks that escaped. Caller must re-run LBFGS after.
+// Post-LBFGS curvature gate. Every cone owner probes its local blocks, then
+// all processes select one globally most-negative block. Only that block owns
+// a direction, but every process participates in the shared line search so
+// row/rank/cone collectives remain ordered consistently.
 static inline int
 DETECT_NEGATIVE_CURVATURE_AND_ESCAPE(cardal_sdp_solver_state_t *state,
                                      double threshold_factor) {
+#ifndef IS_DISTRIBUTED
   if (state->n_blks <= 0)
     return 0;
+#endif
   double scale_factor = 1.0 + state->objective_vector_linf_norm;
   double curvature_threshold = threshold_factor * scale_factor;
 
-  int escaped = 0;
+  if (state->length_low_rank_solution > 0) {
+    CUDA_CHECK(cudaMemset(state->low_rank_direction, 0,
+                          state->length_low_rank_solution * sizeof(double)));
+  }
 
-  CUDA_CHECK(cudaMemset(state->low_rank_direction, 0,
-                        state->length_low_rank_solution * sizeof(double)));
-
-  int blk_offset = 0;
+  double local_min = INFINITY;
+  int local_best_block = -1;
   for (int b = 0; b < state->n_blks; b++) {
     block_low_rank_state_t *blk = state->block_low_rank_state[b];
-    int dim = blk->dim;
-    int r = blk->rank;
-    int blk_len = dim * r;
-
-    if (blk->kind == CONE_BATCH_KIND_CUSTOM || r <= 0) {
-      blk_offset += blk_len;
+    if (blk->rank <= 0)
       continue;
-    }
 
-    double lambda_min;
+    double lambda_min = 0.0;
     double *d_V_neg = NULL;
     FIND_AL_NEGATIVE_CURVATURE(state, b, &lambda_min, &d_V_neg);
-
-    if (d_V_neg == NULL || lambda_min >= -curvature_threshold) {
-      if (d_V_neg)
-        CUDA_CHECK(cudaFree(d_V_neg));
-      blk_offset += blk_len;
-      continue;
+    if (d_V_neg != NULL && lambda_min < -curvature_threshold &&
+        lambda_min < local_min) {
+      local_min = lambda_min;
+      local_best_block = b;
     }
+    if (d_V_neg)
+      CUDA_CHECK(cudaFree(d_V_neg));
+  }
 
+  int winner_block = local_best_block;
+#ifdef IS_DISTRIBUTED
+  int winner_cone = 0;
+  struct {
+    double value;
+    int rank;
+  } local_pair, global_pair;
+  local_pair.value = INFINITY;
+  local_pair.rank = state->grid_context->rank_global;
+  // One representative contributes for each cone owner. Row/rank replicas
+  // have the same reduced Ritz value and are needed only for the winning
+  // direction reconstruction below.
+  if (state->grid_context->coords[0] == 0 &&
+      state->grid_context->coords[1] == 0 && local_best_block >= 0) {
+    local_pair.value = local_min;
+  }
+  MPI_Allreduce(&local_pair, &global_pair, 1, MPI_DOUBLE_INT, MPI_MINLOC,
+                state->grid_context->comm_global);
+  if (!isfinite(global_pair.value)) {
+    if (state->verbose >= 3 && state->grid_context->rank_global == 0)
+      printf("[curvature] no direction below %.3e\n", -curvature_threshold);
+    return 0;
+  }
+
+  int winner_meta[2] = {-1, -1};
+  if (state->grid_context->rank_global == global_pair.rank) {
+    winner_meta[0] = state->grid_context->coords[2];
+    winner_meta[1] = local_best_block;
+  }
+  MPI_Bcast(winner_meta, 2, MPI_INT, global_pair.rank,
+            state->grid_context->comm_global);
+  winner_cone = winner_meta[0];
+  winner_block = winner_meta[1];
+  if (state->verbose >= 3 && state->grid_context->rank_global == 0) {
+    printf("[curvature] selected cone owner %d, local block %d, "
+           "lambda=%.3e\n",
+           winner_cone, winner_block, global_pair.value);
+  }
+#else
+  if (winner_block < 0) {
+    if (state->verbose >= 3)
+      printf("[curvature] no direction below %.3e\n", -curvature_threshold);
+    return 0;
+  }
+  if (state->verbose >= 3)
+    printf("[curvature] selected block %d, lambda=%.3e\n", winner_block,
+           local_min);
+#endif
+
+  double winner_lambda = 0.0;
+  double *d_V_neg = NULL;
+  int owns_winner = 1;
+#ifdef IS_DISTRIBUTED
+  owns_winner = (state->grid_context->coords[2] == winner_cone);
+#endif
+  if (owns_winner) {
+    FIND_AL_NEGATIVE_CURVATURE(state, winner_block, &winner_lambda, &d_V_neg);
+  }
+
+  int direction_ready =
+      !owns_winner || (d_V_neg != NULL && winner_lambda < -curvature_threshold);
+#ifdef IS_DISTRIBUTED
+  int global_direction_ready = 0;
+  MPI_Allreduce(&direction_ready, &global_direction_ready, 1, MPI_INT, MPI_MIN,
+                state->grid_context->comm_global);
+  direction_ready = global_direction_ready;
+#endif
+  if (!direction_ready) {
+    if (d_V_neg)
+      CUDA_CHECK(cudaFree(d_V_neg));
+    return 0;
+  }
+
+  if (owns_winner) {
+    block_low_rank_state_t *blk = state->block_low_rank_state[winner_block];
+    int blk_len = blk->dim * blk->rank;
     double dot_local = 0.0;
     CUBLAS_CHECK(cublasDdot(state->blas_handle, blk_len, blk->gradient, 1,
                             d_V_neg, 1, &dot_local));
-    // Sign-flip decision must be globally consistent across rank-axis peers;
-    // otherwise some ranks flip V_neg and others don't, the per-rank slabs
-    // become incoherent, and the step taken at line ~1591 disagrees.
+    // Rank shards form one product-space direction and must choose one sign.
     double dot = rank_axis_sum_scalar(state, dot_local);
     if (dot > 0.0) {
       double m1 = -1.0;
       CUBLAS_CHECK(cublasDscal(state->blas_handle, blk_len, &m1, d_V_neg, 1));
     }
-
-    // Place V_neg into block b's slot of low_rank_direction.
-    CUDA_CHECK(cudaMemcpy(state->low_rank_direction + blk_offset, d_V_neg,
-                          blk_len * sizeof(double), cudaMemcpyDeviceToDevice));
-
-    double tau = COMPUTE_EXACT_STEP_SIZE_TAUMAX(state, 1e6);
-
-    if (fabs(tau) > 1e-30) {
-      // R_b += tau * V_neg
-      CUBLAS_CHECK(cublasDaxpy(state->blas_handle, blk_len, &tau, d_V_neg, 1,
-                               state->low_rank_solution + blk_offset, 1));
-      escaped++;
-    }
-
-    CUDA_CHECK(cudaMemset(state->low_rank_direction + blk_offset, 0,
-                          blk_len * sizeof(double)));
-
+    CUDA_CHECK(cudaMemcpy(blk->direction, d_V_neg,
+                          (size_t)blk_len * sizeof(double),
+                          cudaMemcpyDeviceToDevice));
     CUDA_CHECK(cudaFree(d_V_neg));
-    blk_offset += blk_len;
   }
+
+  double tau = COMPUTE_EXACT_STEP_SIZE_TAUMAX(state, 1e6);
+  int escaped = fabs(tau) > 1e-30;
+  if (escaped && state->length_low_rank_solution > 0) {
+    CUBLAS_CHECK(
+        cublasDaxpy(state->blas_handle, state->length_low_rank_solution, &tau,
+                    state->low_rank_direction, 1, state->low_rank_solution, 1));
+  }
+  if (state->length_low_rank_solution > 0) {
+    CUDA_CHECK(cudaMemset(state->low_rank_direction, 0,
+                          state->length_low_rank_solution * sizeof(double)));
+  }
+
+#ifdef IS_DISTRIBUTED
+  // Return one logical escape rather than one count per row/rank replica.
+  return escaped && state->grid_context->coords[0] == 0 &&
+         state->grid_context->coords[1] == 0 &&
+         state->grid_context->coords[2] == winner_cone;
+#else
   return escaped;
+#endif
 }
 
 #endif // SOLVER_CORE_OP_CUH

@@ -604,7 +604,7 @@ void compute_RR_block(int blk_idx, cardal_sdp_solver_state_t *state) {
 // Shared implementation of the three matSpS-updating operators:
 //   DUAL_SLACK   : q1 = y,           matSpS_percone = objective + Ay
 //   AL_GRADIENT  : q1 = y + rho*q0,  matSpS_percone = objective + Ay
-//   PENALTY_ONLY : q1 = rho*q0,      matSpS_percone = Ay only (batched skipped)
+//   PENALTY_ONLY : q1 = rho*q0,      matSpS_percone = Ay only
 typedef enum {
   UPDATE_S_DUAL_SLACK,
   UPDATE_S_AL_GRADIENT,
@@ -613,8 +613,6 @@ typedef enum {
 
 static void update_S_impl(cardal_sdp_solver_state_t *state,
                           update_S_mode_t mode) {
-  state->low_rank_slack_include_objective =
-      (mode == UPDATE_S_PENALTY_ONLY) ? 0 : 1;
   // 1. Prepare q1 according to mode.
   switch (mode) {
   case UPDATE_S_DUAL_SLACK:
@@ -654,10 +652,15 @@ static void update_S_impl(cardal_sdp_solver_state_t *state,
     const block_low_rank_state_t *batch =
         state->block_low_rank_state[state->batch_leaders[bi]];
     if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
-      // Batched cones are not overridden by the penalty-only path.
-      if (mode == UPDATE_S_PENALTY_ONLY)
-        continue;
-      launch_batched_copy_objval_to_spS(batch, 0);
+      if (mode == UPDATE_S_PENALTY_ONLY) {
+        if (batch->bdata->total_nnz_S > 0) {
+          CUDA_CHECK(cudaMemsetAsync(
+              batch->bdata->d_flat_spS_val, 0,
+              (size_t)batch->bdata->total_nnz_S * sizeof(double), 0));
+        }
+      } else {
+        launch_batched_copy_objval_to_spS(batch, 0);
+      }
       launch_batched_add_Ay_to_spS(batch, state->dual_product, 0);
       continue;
     }
@@ -705,8 +708,7 @@ void update_al_gradient_S(cardal_sdp_solver_state_t *state) {
   update_S_impl(state, UPDATE_S_AL_GRADIENT);
 }
 
-// matSpS = rho * A*(q0): penalty-only operator. PERCONE blocks only;
-// batched blocks keep whatever update_al_gradient_S left in.
+// matSpS = rho * A*(q0): penalty-only operator.
 void update_penalty_only_S(cardal_sdp_solver_state_t *state) {
   update_S_impl(state, UPDATE_S_PENALTY_ONLY);
 }
@@ -826,6 +828,7 @@ elementwise_multiply_scaled_kernel(double *__restrict__ inout,
 void unscaled_dual_spmv(cardal_sdp_solver_state_t *state,
                         block_low_rank_state_t *blk, double *d_in,
                         double *d_out, double *d_scratch,
+                        int include_low_rank_objective,
                         cusparseDnVecDescr_t vec_in,
                         cusparseDnVecDescr_t vec_out, void *dBuffer) {
   int dim = blk->dim;
@@ -847,8 +850,8 @@ void unscaled_dual_spmv(cardal_sdp_solver_state_t *state,
           cudaMemsetAsync(d_out, 0, (size_t)dim * sizeof(double), stream));
     }
     low_rank_add_operator_times_vector(state, blk, state->q1,
-                                       state->low_rank_slack_include_objective,
-                                       d_scratch, 1.0, d_out);
+                                       include_low_rank_objective, d_scratch,
+                                       1.0, d_out);
     elementwise_multiply_inplace_kernel<<<n_blocks_div, 256, 0, stream>>>(
         d_out, blk->psd_cone_rescaling, dim);
     CUSPARSE_CHECK(cusparseDnVecSetValues(vec_in, d_in));
@@ -864,9 +867,8 @@ void unscaled_dual_spmv(cardal_sdp_solver_state_t *state,
       CUDA_CHECK(
           cudaMemsetAsync(d_out, 0, (size_t)dim * sizeof(double), stream));
     }
-    low_rank_add_operator_times_vector(state, blk, state->q1,
-                                       state->low_rank_slack_include_objective,
-                                       d_in, 1.0, d_out);
+    low_rank_add_operator_times_vector(
+        state, blk, state->q1, include_low_rank_objective, d_in, 1.0, d_out);
   }
 }
 void populate_state_scaling_fields(cardal_sdp_solver_state_t *state,

@@ -339,11 +339,6 @@ typedef struct {
   int gap_stall_count;
   int consecutive_gate_pass;
   int force_augment_this_iter;
-
-  // q1 supplies the multiplier coefficients for matrix-free low-rank slack
-  // actions. Objective columns are included for dual/AL slack and excluded
-  // for penalty-only actions.
-  int low_rank_slack_include_objective;
 } cardal_sdp_solver_state_t;
 
 #ifdef __cplusplus

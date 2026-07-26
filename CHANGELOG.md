@@ -19,6 +19,13 @@ The format follows [Keep a Changelog], and this project adheres to
 - Added batched GPU kernels for signed low-rank operations on groups of small
   PSD cones, including cones with different adaptive ranks.
 
+### Changed
+
+- Fix the bug in negative-curvature detection to batched-cone leaders and
+  cone-distributed MPI grids using one globally synchronized escape direction.
+- Made low-rank objective inclusion explicit in slack and Hessian actions, and
+  added a true penalty-only update for custom cone batches.
+
 ## [0.1.1] - 2026-07-25
 
 ### Added

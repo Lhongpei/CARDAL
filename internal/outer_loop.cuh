@@ -189,11 +189,6 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
 
       const double negative_curvature_threshold_factor = 1e-4;
       const int max_curvature_escape_steps = 3;
-      int curvature_detection_disabled = 0;
-#ifdef IS_DISTRIBUTED
-      if (state->grid_context != NULL && state->grid_context->dims[2] > 1)
-        curvature_detection_disabled = 1;
-#endif
       int inner_iters = ALM_INNER_SOLVER(state, tol);
       state->num_inner_iteration += inner_iters;
       inner_iters_total_this_round += inner_iters;
@@ -211,7 +206,7 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
           (iters_since_curvature_check >= curvature_check_throttle_iters);
       int should_detect_curvature = stationary && gap_stalled && throttle_ok;
 #ifdef IS_DISTRIBUTED
-      if (!curvature_detection_disabled && state->grid_context != NULL) {
+      if (state->grid_context != NULL) {
         int local_detect = should_detect_curvature ? 1 : 0;
         int global_detect = 0;
         MPI_Allreduce(&local_detect, &global_detect, 1, MPI_INT, MPI_MAX,
@@ -219,9 +214,13 @@ static inline void run_alm_outer_loop(cardal_sdp_solver_state_t *state,
         should_detect_curvature = global_detect;
       }
 #endif
-      if (!curvature_detection_disabled && should_detect_curvature) {
+      if (should_detect_curvature) {
         state->curvature_last_check_iter = state->num_outer_iteration;
         state->gap_stall_count = 0;
+        // Exact line search reuses q1 as a residual workspace. Rebuild the
+        // AL gradient so both sparse and matrix-free slack terms describe the
+        // current point before entering the Hessian oracle.
+        COMPUTE_GRADIENT(state);
         {
           const double post_esc_tol_factor = 0.01;
           double post_esc_tol = tol * post_esc_tol_factor;
