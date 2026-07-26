@@ -36,6 +36,9 @@ $C$ and each $A_i$ are symmetric block-diagonal matrices. Every matrix is stored
 
 - **GPU-native.** Most operations are implemented natively on GPUs.
 - **Multi-GPU.** MPI + NCCL parallelization across constraint, rank, and cone axes, enabled by default (`-DENABLE_MPI=OFF` to opt out).
+- **Structured matrix data.** Objective and constraint blocks may be supplied
+  as signed low-rank or sparse-plus-low-rank matrices without materializing
+  dense matrices.
 - **Algorithm.** Adaptive rank augmentation, negative curvature escape.
 
 ## Requirements
@@ -96,8 +99,16 @@ solution to `./output`. LP and free primal vectors are included when present.
 
 ```python
 import cardal
+import numpy as np
 
-m = cardal.Model.read_file("problem.dat-s")        # or .dat-s.gz / .mat / .npz
+m = cardal.Model()
+u = np.array([[1.0], [2.0], [-1.0]])
+m.set_problem(
+    block_dims=[3],
+    b=[1.0],
+    C=[cardal.LowRank(u, weights=[-1.0])],
+    A=[[cardal.LowRank(np.eye(3))]],
+)
 result = m.solve(
     time_sec_limit=60.0,
     eps_primal_relative=1e-4,
@@ -106,6 +117,12 @@ result = m.solve(
 )
 print(result.status, result.primal_objective, result.rel_objective_gap)
 ```
+
+`LowRank(U, weights=d)` represents \(U\mathrm{diag}(d)U^\top\);
+weights may be negative. `SparseLowRank(S, U, weights=d)` represents
+\(S+U\mathrm{diag}(d)U^\top\). A small symmetric `core=D` may be
+provided instead of diagonal weights. File-based loading remains available
+through `cardal.Model.read_file(...)`.
 
 ## Advanced Usage
 

@@ -113,7 +113,7 @@ basic_sdp_t *sdp_problem_parse(const char *filename) {
 
   if (sdp && sdp->m > 0) {
     LOG_DBG("[Parser] Successfully loaded problem: m=%d, n_cones=%d\n", sdp->m,
-           sdp->n_cones);
+            sdp->n_cones);
   }
 
   return sdp;
@@ -152,6 +152,15 @@ void free_basic_sdp(basic_sdp_t *sdp) {
     free(sdp->free_constraints->col_ind);
     free(sdp->free_constraints->val);
     free(sdp->free_constraints);
+  }
+
+  if (sdp->low_rank_data) {
+    free(sdp->low_rank_data->constraint_ind);
+    free(sdp->low_rank_data->cone_ind);
+    free(sdp->low_rank_data->factor_ptr);
+    free(sdp->low_rank_data->factor_values);
+    free(sdp->low_rank_data->weights);
+    free(sdp->low_rank_data);
   }
 
   free(sdp->lp_objective);

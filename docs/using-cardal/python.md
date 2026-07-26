@@ -35,7 +35,8 @@ model.load_file("another-problem.dat-s")
 
 ## Construct from block matrices
 
-`set_problem` accepts dense NumPy arrays or SciPy sparse matrices:
+`set_problem` accepts dense NumPy arrays, SciPy sparse matrices, and structured
+low-rank matrices:
 
 ```python
 import numpy as np
@@ -60,6 +61,38 @@ The example solves
 
 `A[i][c]` is the block for constraint \(i\), cone \(c\). It may be `None` to
 represent a zero block. Only the lower triangle of each matrix is read.
+
+### Low-rank matrix data
+
+Use `LowRank` for \(U\mathrm{diag}(d)U^\top\). Signed weights are
+supported:
+
+```python
+u = np.array([[1.0], [2.0], [-1.0]])
+
+model.set_problem(
+    block_dims=[3],
+    C=[cardal.LowRank(u, weights=[-1.0])],
+    A=[[cardal.LowRank(np.eye(3))]],
+    b=[1.0],
+)
+```
+
+Use `SparseLowRank` when a block also has a sparse or dense component:
+
+```python
+from scipy import sparse
+
+S = sparse.diags([0.2, 0.4, 0.6])
+D = np.array([[-1.0, 0.25], [0.25, 0.5]])
+U = np.array([[1.0, 0.0], [2.0, 1.0], [-1.0, 2.0]])
+
+C0 = cardal.SparseLowRank(S, U, core=D)
+```
+
+`core=D` represents \(UDU^\top\). CARDAL diagonalizes the small symmetric
+core once when the Python object is constructed. `tolerance` optionally drops
+eigenvalues whose absolute value does not exceed the given threshold.
 
 ## Construct from COO arrays
 
@@ -92,6 +125,11 @@ model.set_problem_coo(
 
 All coordinate arrays are zero-indexed. CARDAL converts index arrays to
 contiguous `int32` storage and values to contiguous `float64` storage.
+
+The low-level method also accepts `C_low_rank=(cone, rank, factors, weights)`
+and `A_low_rank=(constraint, cone, rank, factors, weights)`. Each `rank` entry
+describes one term. Factor matrices are flattened column-major and concatenated
+term by term; weight vectors are concatenated in the same order.
 
 ## Add a nonnegative LP tail
 
@@ -166,8 +204,8 @@ print(defaults)
 | `Model()` | Create an empty reusable model |
 | `Model.read_file(path)` | Construct a model from a supported problem file |
 | `load_file(path)` | Replace the problem held by an existing model |
-| `set_problem(...)` | Build from dense or sparse block matrices |
-| `set_problem_coo(...)` | Build from raw COO arrays |
+| `set_problem(...)` | Build from dense, sparse, low-rank, or hybrid block matrices |
+| `set_problem_coo(...)` | Build from raw COO and packed low-rank arrays |
 | `solve(**params)` | Solve and return an immutable `Result` |
 | `Model.default_params()` | Return all recognized parameters and defaults |
 | `num_cones` | Number of PSD blocks |

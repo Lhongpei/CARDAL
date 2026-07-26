@@ -14,10 +14,10 @@
 
 #include "cardal.h"
 
-#include "sdp_types.h"     /* basic_sdp_t, compressed_sdp_problem_t, cardal_parameters_t, sdp_result_t */
-#include "parser.h"        /* sdp_problem_parse, free_basic_sdp */
-#include "solver.h"        /* optimize */
-#include "utils.h"         /* convert_to_compressed, free_compressed_sdp, safe_malloc, set_default_parameters */
+#include "parser.h" /* sdp_problem_parse, free_basic_sdp */
+#include "sdp_types.h" /* basic_sdp_t, compressed_sdp_problem_t, cardal_parameters_t, sdp_result_t */
+#include "solver.h" /* optimize */
+#include "utils.h" /* convert_to_compressed, free_compressed_sdp, safe_malloc, set_default_parameters */
 
 #include <signal.h>
 #include <stdlib.h>
@@ -28,9 +28,10 @@
  *
  * Set from a signal handler (typically the Python binding's SIGINT trap);
  * polled from the ALM outer loop (`check_termination` in outer_loop.cuh).
- * When observed non-zero the outer loop returns TERMINATION_REASON_USER_INTERRUPT
- * cleanly, so the C-side state is freed correctly and the caller can decide
- * what to do (Python binding re-raises KeyboardInterrupt).
+ * When observed non-zero the outer loop returns
+ * TERMINATION_REASON_USER_INTERRUPT cleanly, so the C-side state is freed
+ * correctly and the caller can decide what to do (Python binding re-raises
+ * KeyboardInterrupt).
  *
  * The flag lives in a plain C TU so both a C signal handler and a CUDA
  * .cu poll site can see it.
@@ -38,20 +39,20 @@
 volatile sig_atomic_t g_cardal_cancel_request = 0;
 
 void cardal_request_cancel(void) { g_cardal_cancel_request = 1; }
-void cardal_clear_cancel(void)   { g_cardal_cancel_request = 0; }
-int  cardal_cancel_requested(void) { return (int)g_cardal_cancel_request; }
+void cardal_clear_cancel(void) { g_cardal_cancel_request = 0; }
+int cardal_cancel_requested(void) { return (int)g_cardal_cancel_request; }
 
 /* -----------------------------------------------------------------------
  * Opaque handle definitions
  * ----------------------------------------------------------------------- */
 
 struct cardal_problem {
-  basic_sdp_t              *basic;      /* owned; raw parsed form */
+  basic_sdp_t *basic;                   /* owned; raw parsed form */
   compressed_sdp_problem_t *compressed; /* owned; solver-ready form */
 };
 
 struct cardal_result {
-  sdp_result_t *inner;                  /* owned */
+  sdp_result_t *inner; /* owned */
 };
 
 /* -----------------------------------------------------------------------
@@ -63,49 +64,49 @@ void cardal_default_params(cardal_params *p) {
     return;
   cardal_parameters_t d;
   set_default_parameters(&d);
-  p->eps_primal_relative    = d.termination_criteria.eps_primal_relative;
-  p->eps_dual_relative      = d.termination_criteria.eps_dual_relative;
-  p->eps_optimal_relative   = d.termination_criteria.eps_optimal_relative;
-  p->time_sec_limit         = d.termination_criteria.time_sec_limit;
-  p->iteration_limit        = d.termination_criteria.iteration_limit;
-  p->initial_rank           = d.initial_rank;
-  p->max_rank               = d.max_rank;
-  p->augmentation_mode      = (int)d.augmentation_mode;
-  p->lbfgs_history_size     = d.lbfgs_history_size;
-  p->penalty_factor         = d.penalty_factor;
-  p->initial_penalty_coef   = d.initial_penalty_coef;
-  p->max_penalty_coef       = d.max_penalty_coef;
+  p->eps_primal_relative = d.termination_criteria.eps_primal_relative;
+  p->eps_dual_relative = d.termination_criteria.eps_dual_relative;
+  p->eps_optimal_relative = d.termination_criteria.eps_optimal_relative;
+  p->time_sec_limit = d.termination_criteria.time_sec_limit;
+  p->iteration_limit = d.termination_criteria.iteration_limit;
+  p->initial_rank = d.initial_rank;
+  p->max_rank = d.max_rank;
+  p->augmentation_mode = (int)d.augmentation_mode;
+  p->lbfgs_history_size = d.lbfgs_history_size;
+  p->penalty_factor = d.penalty_factor;
+  p->initial_penalty_coef = d.initial_penalty_coef;
+  p->max_penalty_coef = d.max_penalty_coef;
   p->inner_iterations_limit = (long)d.inner_iterations_limit;
-  p->l_inf_ruiz_iterations  = d.l_inf_ruiz_iterations;
+  p->l_inf_ruiz_iterations = d.l_inf_ruiz_iterations;
   p->pock_chambolle_rescaling = d.has_pock_chambolle_alpha ? 1 : 0;
-  p->pock_chambolle_alpha   = d.pock_chambolle_alpha;
+  p->pock_chambolle_alpha = d.pock_chambolle_alpha;
   p->bound_objective_rescaling = d.bound_objective_rescaling ? 1 : 0;
-  p->psd_scale_mode         = d.psd_scale_mode;
-  p->verbose                = d.verbose;
+  p->psd_scale_mode = d.psd_scale_mode;
+  p->verbose = d.verbose;
 }
 
 /* Copy cardal_params (public POD) → cardal_parameters_t (internal). */
 static void cardal_params_to_internal(const cardal_params *src,
-                                      cardal_parameters_t   *dst) {
+                                      cardal_parameters_t *dst) {
   /* Start with baseline defaults so any field not covered by the public
      ABI (rescaling flags, grid_size, etc.) gets a sensible value. */
   set_default_parameters(dst);
   if (src == NULL)
     return;
-  dst->termination_criteria.eps_optimal_relative  = src->eps_optimal_relative;
-  dst->termination_criteria.eps_primal_relative   = src->eps_primal_relative;
-  dst->termination_criteria.eps_dual_relative     = src->eps_dual_relative;
-  dst->termination_criteria.time_sec_limit        = src->time_sec_limit;
-  dst->termination_criteria.iteration_limit       = src->iteration_limit;
-  dst->initial_rank           = src->initial_rank;
-  dst->max_rank               = src->max_rank;
+  dst->termination_criteria.eps_optimal_relative = src->eps_optimal_relative;
+  dst->termination_criteria.eps_primal_relative = src->eps_primal_relative;
+  dst->termination_criteria.eps_dual_relative = src->eps_dual_relative;
+  dst->termination_criteria.time_sec_limit = src->time_sec_limit;
+  dst->termination_criteria.iteration_limit = src->iteration_limit;
+  dst->initial_rank = src->initial_rank;
+  dst->max_rank = src->max_rank;
   if (src->augmentation_mode >= CARDAL_AUGMENTATION_RANDOM &&
       src->augmentation_mode <= CARDAL_AUGMENTATION_SDP)
     dst->augmentation_mode = (augmentation_mode_t)src->augmentation_mode;
-  dst->lbfgs_history_size     = src->lbfgs_history_size;
-  dst->penalty_factor         = src->penalty_factor;
-  dst->initial_penalty_coef   = src->initial_penalty_coef;
-  dst->max_penalty_coef       = src->max_penalty_coef;
+  dst->lbfgs_history_size = src->lbfgs_history_size;
+  dst->penalty_factor = src->penalty_factor;
+  dst->initial_penalty_coef = src->initial_penalty_coef;
+  dst->max_penalty_coef = src->max_penalty_coef;
   dst->inner_iterations_limit = (double)src->inner_iterations_limit;
   dst->l_inf_ruiz_iterations =
       src->l_inf_ruiz_iterations > 0 ? src->l_inf_ruiz_iterations : 0;
@@ -115,7 +116,7 @@ static void cardal_params_to_internal(const cardal_params *src,
   if (src->psd_scale_mode == CARDAL_PSD_SCALE_PER_ELEMENT ||
       src->psd_scale_mode == CARDAL_PSD_SCALE_PER_CONE)
     dst->psd_scale_mode = src->psd_scale_mode;
-  dst->verbose                = src->verbose;
+  dst->verbose = src->verbose;
 }
 
 /* -----------------------------------------------------------------------
@@ -123,7 +124,11 @@ static void cardal_params_to_internal(const cardal_params *src,
  * ----------------------------------------------------------------------- */
 
 cardal_problem *cardal_read_sdpa(const char *path, cardal_error *err_out) {
-#define SET_ERR(code) do { if (err_out) *err_out = (code); } while (0)
+#define SET_ERR(code)                                                          \
+  do {                                                                         \
+    if (err_out)                                                               \
+      *err_out = (code);                                                       \
+  } while (0)
   if (path == NULL) {
     SET_ERR(CARDAL_E_NULL_ARG);
     return NULL;
@@ -147,31 +152,110 @@ cardal_problem *cardal_read_sdpa(const char *path, cardal_error *err_out) {
     SET_ERR(CARDAL_E_INTERNAL);
     return NULL;
   }
-  out->basic      = basic;
+  out->basic = basic;
   out->compressed = comp;
   SET_ERR(CARDAL_OK);
   return out;
 #undef SET_ERR
 }
 
-/* Copy `n` ints from src to a fresh safe_malloc'd buffer; returns NULL if n==0. */
+/* Copy `n` ints from src to a fresh safe_malloc'd buffer; returns NULL if n==0.
+ */
 static int *dup_ints(const int *src, int n) {
-  if (n <= 0 || src == NULL) return NULL;
+  if (n <= 0 || src == NULL)
+    return NULL;
   int *dst = (int *)safe_malloc((size_t)n * sizeof(int));
   memcpy(dst, src, (size_t)n * sizeof(int));
   return dst;
 }
 
 static double *dup_doubles(const double *src, int n) {
-  if (n <= 0 || src == NULL) return NULL;
+  if (n <= 0 || src == NULL)
+    return NULL;
   double *dst = (double *)safe_malloc((size_t)n * sizeof(double));
   memcpy(dst, src, (size_t)n * sizeof(double));
   return dst;
 }
 
+static symmetric_low_rank_data_t *
+copy_low_rank_terms(const cardal_problem_data *data) {
+  int total_columns = 0;
+  long long total_factor_values = 0;
+  for (int t = 0; t < data->num_c_lr_terms; t++) {
+    int cone = data->c_lr_cone_ind[t];
+    int rank = data->c_lr_rank[t];
+    total_columns += rank;
+    total_factor_values += (long long)data->blk_dims[cone] * rank;
+  }
+  for (int t = 0; t < data->num_a_lr_terms; t++) {
+    int cone = data->a_lr_cone_ind[t];
+    int rank = data->a_lr_rank[t];
+    total_columns += rank;
+    total_factor_values += (long long)data->blk_dims[cone] * rank;
+  }
+  if (total_columns == 0)
+    return NULL;
+
+  symmetric_low_rank_data_t *out = (symmetric_low_rank_data_t *)safe_calloc(
+      1, sizeof(symmetric_low_rank_data_t));
+  out->num_columns = total_columns;
+  out->constraint_ind = (int *)safe_malloc((size_t)total_columns * sizeof(int));
+  out->cone_ind = (int *)safe_malloc((size_t)total_columns * sizeof(int));
+  out->factor_ptr =
+      (long long *)safe_malloc((size_t)(total_columns + 1) * sizeof(long long));
+  out->factor_values =
+      (double *)safe_malloc((size_t)total_factor_values * sizeof(double));
+  out->weights = (double *)safe_malloc((size_t)total_columns * sizeof(double));
+
+  int column = 0;
+  long long factor_write = 0;
+  long long input_factor = 0;
+  int input_weight = 0;
+  out->factor_ptr[0] = 0;
+  for (int t = 0; t < data->num_c_lr_terms; t++) {
+    int cone = data->c_lr_cone_ind[t];
+    int rank = data->c_lr_rank[t];
+    int dim = data->blk_dims[cone];
+    for (int j = 0; j < rank; j++) {
+      out->constraint_ind[column] = -1;
+      out->cone_ind[column] = cone;
+      out->weights[column] = data->c_lr_weights[input_weight++];
+      memcpy(out->factor_values + factor_write,
+             data->c_lr_factors + input_factor, (size_t)dim * sizeof(double));
+      input_factor += dim;
+      factor_write += dim;
+      out->factor_ptr[++column] = factor_write;
+    }
+  }
+
+  input_factor = 0;
+  input_weight = 0;
+  for (int t = 0; t < data->num_a_lr_terms; t++) {
+    int constr = data->a_lr_constr_ind[t];
+    int cone = data->a_lr_cone_ind[t];
+    int rank = data->a_lr_rank[t];
+    int dim = data->blk_dims[cone];
+    for (int j = 0; j < rank; j++) {
+      out->constraint_ind[column] = constr;
+      out->cone_ind[column] = cone;
+      out->weights[column] = data->a_lr_weights[input_weight++];
+      memcpy(out->factor_values + factor_write,
+             data->a_lr_factors + input_factor, (size_t)dim * sizeof(double));
+      input_factor += dim;
+      factor_write += dim;
+      out->factor_ptr[++column] = factor_write;
+    }
+  }
+  return out;
+}
+
 cardal_problem *cardal_build_problem(const cardal_problem_data *data,
                                      cardal_error *err_out) {
-#define SET_ERR(code) do { if (err_out) *err_out = (code); } while (0)
+#define SET_ERR(code)                                                          \
+  do {                                                                         \
+    if (err_out)                                                               \
+      *err_out = (code);                                                       \
+  } while (0)
   if (data == NULL) {
     SET_ERR(CARDAL_E_NULL_ARG);
     return NULL;
@@ -203,25 +287,52 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
     SET_ERR(CARDAL_E_NULL_ARG);
     return NULL;
   }
+  if (data->num_c_lr_terms < 0 || data->num_a_lr_terms < 0 ||
+      (data->num_c_lr_terms > 0 &&
+       (!data->c_lr_cone_ind || !data->c_lr_rank || !data->c_lr_factors ||
+        !data->c_lr_weights)) ||
+      (data->num_a_lr_terms > 0 &&
+       (!data->a_lr_constr_ind || !data->a_lr_cone_ind || !data->a_lr_rank ||
+        !data->a_lr_factors || !data->a_lr_weights))) {
+    SET_ERR(CARDAL_E_NULL_ARG);
+    return NULL;
+  }
+  for (int t = 0; t < data->num_c_lr_terms; t++) {
+    if (data->c_lr_cone_ind[t] < 0 ||
+        data->c_lr_cone_ind[t] >= data->num_cones || data->c_lr_rank[t] <= 0) {
+      SET_ERR(CARDAL_E_NULL_ARG);
+      return NULL;
+    }
+  }
+  for (int t = 0; t < data->num_a_lr_terms; t++) {
+    if (data->a_lr_constr_ind[t] < 0 ||
+        data->a_lr_constr_ind[t] >= data->num_constraints ||
+        data->a_lr_cone_ind[t] < 0 ||
+        data->a_lr_cone_ind[t] >= data->num_cones || data->a_lr_rank[t] <= 0) {
+      SET_ERR(CARDAL_E_NULL_ARG);
+      return NULL;
+    }
+  }
 
   basic_sdp_t *basic = (basic_sdp_t *)safe_malloc(sizeof(basic_sdp_t));
   memset(basic, 0, sizeof(*basic));
-  basic->m       = data->num_constraints;
+  basic->m = data->num_constraints;
   basic->n_cones = data->num_cones;
-  basic->lp_dim  = data->lp_dim;
+  basic->lp_dim = data->lp_dim;
   basic->free_dim = data->free_dim;
-  basic->blk_dims        = dup_ints(data->blk_dims, data->num_cones);
-  basic->right_hand_side = dup_doubles(data->b,     data->num_constraints);
+  basic->blk_dims = dup_ints(data->blk_dims, data->num_cones);
+  basic->right_hand_side = dup_doubles(data->b, data->num_constraints);
 
   /* PSD objective (C) */
   basic->nnz_psd_obj = data->nnz_c;
   if (data->nnz_c > 0) {
     basic->psd_cone_objective =
         (psd_cone_objective_t *)safe_malloc(sizeof(psd_cone_objective_t));
-    basic->psd_cone_objective->cone_ind = dup_ints(data->c_cone_ind, data->nnz_c);
-    basic->psd_cone_objective->row_ind  = dup_ints(data->c_row_ind,  data->nnz_c);
-    basic->psd_cone_objective->col_ind  = dup_ints(data->c_col_ind,  data->nnz_c);
-    basic->psd_cone_objective->val      = dup_doubles(data->c_val,   data->nnz_c);
+    basic->psd_cone_objective->cone_ind =
+        dup_ints(data->c_cone_ind, data->nnz_c);
+    basic->psd_cone_objective->row_ind = dup_ints(data->c_row_ind, data->nnz_c);
+    basic->psd_cone_objective->col_ind = dup_ints(data->c_col_ind, data->nnz_c);
+    basic->psd_cone_objective->val = dup_doubles(data->c_val, data->nnz_c);
   }
 
   /* PSD constraints (A_i) */
@@ -229,17 +340,21 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
   if (data->nnz_a > 0) {
     basic->psd_cone_constraints =
         (psd_cone_constraint_t *)safe_malloc(sizeof(psd_cone_constraint_t));
-    basic->psd_cone_constraints->constr_ind = dup_ints(data->a_constr_ind, data->nnz_a);
-    basic->psd_cone_constraints->cone_ind   = dup_ints(data->a_cone_ind,   data->nnz_a);
-    basic->psd_cone_constraints->row_ind    = dup_ints(data->a_row_ind,    data->nnz_a);
-    basic->psd_cone_constraints->col_ind    = dup_ints(data->a_col_ind,    data->nnz_a);
-    basic->psd_cone_constraints->val        = dup_doubles(data->a_val,     data->nnz_a);
+    basic->psd_cone_constraints->constr_ind =
+        dup_ints(data->a_constr_ind, data->nnz_a);
+    basic->psd_cone_constraints->cone_ind =
+        dup_ints(data->a_cone_ind, data->nnz_a);
+    basic->psd_cone_constraints->row_ind =
+        dup_ints(data->a_row_ind, data->nnz_a);
+    basic->psd_cone_constraints->col_ind =
+        dup_ints(data->a_col_ind, data->nnz_a);
+    basic->psd_cone_constraints->val = dup_doubles(data->a_val, data->nnz_a);
   }
 
   /* LP objective (dense) */
   if (data->lp_dim > 0) {
     basic->lp_objective = dup_doubles(data->lp_obj, data->lp_dim);
-    basic->nnz_lp_obj   = data->lp_dim;
+    basic->nnz_lp_obj = data->lp_dim;
   }
 
   /* LP constraints (A_lp) */
@@ -247,14 +362,16 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
   if (data->nnz_lp > 0) {
     basic->lp_constraints =
         (lp_constraint_t *)safe_malloc(sizeof(lp_constraint_t));
-    basic->lp_constraints->row_ind = dup_ints(data->lp_constr_ind, data->nnz_lp);
-    basic->lp_constraints->col_ind = dup_ints(data->lp_col_ind,    data->nnz_lp);
-    basic->lp_constraints->val     = dup_doubles(data->lp_val,     data->nnz_lp);
+    basic->lp_constraints->row_ind =
+        dup_ints(data->lp_constr_ind, data->nnz_lp);
+    basic->lp_constraints->col_ind = dup_ints(data->lp_col_ind, data->nnz_lp);
+    basic->lp_constraints->val = dup_doubles(data->lp_val, data->nnz_lp);
   }
   if (data->free_dim > 0) {
     basic->free_objective = dup_doubles(data->free_obj, data->free_dim);
     basic->nnz_free_obj = data->free_dim;
   }
+  basic->low_rank_data = copy_low_rank_terms(data);
   basic->nnz_free_constr = data->nnz_free;
   if (data->nnz_free > 0) {
     basic->free_constraints =
@@ -263,8 +380,7 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
         dup_ints(data->free_constr_ind, data->nnz_free);
     basic->free_constraints->col_ind =
         dup_ints(data->free_col_ind, data->nnz_free);
-    basic->free_constraints->val =
-        dup_doubles(data->free_val, data->nnz_free);
+    basic->free_constraints->val = dup_doubles(data->free_val, data->nnz_free);
   }
 
   compressed_sdp_problem_t *comp = convert_to_compressed(basic);
@@ -281,7 +397,7 @@ cardal_problem *cardal_build_problem(const cardal_problem_data *data,
     SET_ERR(CARDAL_E_INTERNAL);
     return NULL;
   }
-  out->basic      = basic;
+  out->basic = basic;
   out->compressed = comp;
   SET_ERR(CARDAL_OK);
   return out;
@@ -339,7 +455,7 @@ cardal_result *cardal_solve(cardal_problem *problem,
 
   cardal_parameters_t p;
   cardal_params_to_internal(params, &p);
-  p.instance_label    = NULL;
+  p.instance_label = NULL;
   p.summary_file_path = NULL;
 
   sdp_result_t *r = optimize(problem->compressed, &p);
@@ -362,12 +478,17 @@ cardal_result *cardal_solve(cardal_problem *problem,
 /* Map internal termination reason to public status. */
 static cardal_status map_status(termination_reason_t t) {
   switch (t) {
-  case TERMINATION_REASON_OPTIMAL:         return CARDAL_STATUS_OPTIMAL;
-  case TERMINATION_REASON_TIME_LIMIT:      return CARDAL_STATUS_TIME_LIMIT;
-  case TERMINATION_REASON_ITERATION_LIMIT: return CARDAL_STATUS_ITERATION_LIMIT;
-  case TERMINATION_REASON_USER_INTERRUPT:  return CARDAL_STATUS_USER_INTERRUPT;
+  case TERMINATION_REASON_OPTIMAL:
+    return CARDAL_STATUS_OPTIMAL;
+  case TERMINATION_REASON_TIME_LIMIT:
+    return CARDAL_STATUS_TIME_LIMIT;
+  case TERMINATION_REASON_ITERATION_LIMIT:
+    return CARDAL_STATUS_ITERATION_LIMIT;
+  case TERMINATION_REASON_USER_INTERRUPT:
+    return CARDAL_STATUS_USER_INTERRUPT;
   case TERMINATION_REASON_UNSPECIFIED:
-  default:                                 return CARDAL_STATUS_UNSPECIFIED;
+  default:
+    return CARDAL_STATUS_UNSPECIFIED;
   }
 }
 
@@ -376,74 +497,107 @@ cardal_status cardal_result_status(const cardal_result *r) {
                          : CARDAL_STATUS_UNSPECIFIED;
 }
 
-#define RETURN_FIELD(r, field, fallback) \
+#define RETURN_FIELD(r, field, fallback)                                       \
   (((r) && (r)->inner) ? (r)->inner->field : (fallback))
 
-double cardal_result_primal_objective(const cardal_result *r) { return RETURN_FIELD(r, primal_objective_value,     0.0); }
-double cardal_result_dual_objective  (const cardal_result *r) { return RETURN_FIELD(r, dual_objective_value,       0.0); }
-double cardal_result_objective_gap   (const cardal_result *r) { return RETURN_FIELD(r, objective_gap,              0.0); }
-double cardal_result_rel_primal_residual(const cardal_result *r) { return RETURN_FIELD(r, relative_primal_residual, 0.0); }
-double cardal_result_rel_dual_residual  (const cardal_result *r) { return RETURN_FIELD(r, relative_dual_residual,   0.0); }
-double cardal_result_rel_objective_gap  (const cardal_result *r) { return RETURN_FIELD(r, relative_objective_gap,   0.0); }
-double cardal_result_runtime_sec        (const cardal_result *r) { return RETURN_FIELD(r, cumulative_time_sec,      0.0); }
-int    cardal_result_outer_iters        (const cardal_result *r) { return RETURN_FIELD(r, total_count,              0);   }
-int    cardal_result_inner_iters        (const cardal_result *r) { return RETURN_FIELD(r, total_inner_count,        0);   }
-int    cardal_result_num_cones          (const cardal_result *r) { return RETURN_FIELD(r, n_cones,                  0);   }
-int    cardal_result_num_variables      (const cardal_result *r) { return RETURN_FIELD(r, num_variables,            0);   }
-int    cardal_result_num_constraints    (const cardal_result *r) { return RETURN_FIELD(r, num_constraints,          0);   }
-int    cardal_result_total_rank         (const cardal_result *r) { return RETURN_FIELD(r, rank,                     0);   }
+double cardal_result_primal_objective(const cardal_result *r) {
+  return RETURN_FIELD(r, primal_objective_value, 0.0);
+}
+double cardal_result_dual_objective(const cardal_result *r) {
+  return RETURN_FIELD(r, dual_objective_value, 0.0);
+}
+double cardal_result_objective_gap(const cardal_result *r) {
+  return RETURN_FIELD(r, objective_gap, 0.0);
+}
+double cardal_result_rel_primal_residual(const cardal_result *r) {
+  return RETURN_FIELD(r, relative_primal_residual, 0.0);
+}
+double cardal_result_rel_dual_residual(const cardal_result *r) {
+  return RETURN_FIELD(r, relative_dual_residual, 0.0);
+}
+double cardal_result_rel_objective_gap(const cardal_result *r) {
+  return RETURN_FIELD(r, relative_objective_gap, 0.0);
+}
+double cardal_result_runtime_sec(const cardal_result *r) {
+  return RETURN_FIELD(r, cumulative_time_sec, 0.0);
+}
+int cardal_result_outer_iters(const cardal_result *r) {
+  return RETURN_FIELD(r, total_count, 0);
+}
+int cardal_result_inner_iters(const cardal_result *r) {
+  return RETURN_FIELD(r, total_inner_count, 0);
+}
+int cardal_result_num_cones(const cardal_result *r) {
+  return RETURN_FIELD(r, n_cones, 0);
+}
+int cardal_result_num_variables(const cardal_result *r) {
+  return RETURN_FIELD(r, num_variables, 0);
+}
+int cardal_result_num_constraints(const cardal_result *r) {
+  return RETURN_FIELD(r, num_constraints, 0);
+}
+int cardal_result_total_rank(const cardal_result *r) {
+  return RETURN_FIELD(r, rank, 0);
+}
 
 #undef RETURN_FIELD
 
 const double *cardal_result_primal_factor(const cardal_result *r,
                                           int *out_length) {
   if (r == NULL || r->inner == NULL) {
-    if (out_length) *out_length = 0;
+    if (out_length)
+      *out_length = 0;
     return NULL;
   }
-  if (out_length) *out_length = (int)r->inner->psd_factor_length;
+  if (out_length)
+    *out_length = (int)r->inner->psd_factor_length;
   return r->inner->low_rank_primal_solution;
 }
 
-const double *cardal_result_lp_primal(const cardal_result *r,
-                                      int *out_length) {
+const double *cardal_result_lp_primal(const cardal_result *r, int *out_length) {
   if (r == NULL || r->inner == NULL || r->inner->lp_dim <= 0 ||
       r->inner->low_rank_primal_solution == NULL) {
-    if (out_length) *out_length = 0;
+    if (out_length)
+      *out_length = 0;
     return NULL;
   }
-  if (out_length) *out_length = r->inner->lp_dim;
-  return r->inner->low_rank_primal_solution +
-         r->inner->lp_solution_offset;
+  if (out_length)
+    *out_length = r->inner->lp_dim;
+  return r->inner->low_rank_primal_solution + r->inner->lp_solution_offset;
 }
 
 const double *cardal_result_free_primal(const cardal_result *r,
                                         int *out_length) {
   if (r == NULL || r->inner == NULL || r->inner->free_dim <= 0 ||
       r->inner->low_rank_primal_solution == NULL) {
-    if (out_length) *out_length = 0;
+    if (out_length)
+      *out_length = 0;
     return NULL;
   }
-  if (out_length) *out_length = r->inner->free_dim;
-  return r->inner->low_rank_primal_solution +
-         r->inner->free_solution_offset;
+  if (out_length)
+    *out_length = r->inner->free_dim;
+  return r->inner->low_rank_primal_solution + r->inner->free_solution_offset;
 }
 
 const double *cardal_result_dual(const cardal_result *r, int *out_length) {
   if (r == NULL || r->inner == NULL) {
-    if (out_length) *out_length = 0;
+    if (out_length)
+      *out_length = 0;
     return NULL;
   }
-  if (out_length) *out_length = r->inner->num_constraints;
+  if (out_length)
+    *out_length = r->inner->num_constraints;
   return r->inner->dual_solution;
 }
 
 const int *cardal_result_rank_list(const cardal_result *r, int *out_length) {
   if (r == NULL || r->inner == NULL) {
-    if (out_length) *out_length = 0;
+    if (out_length)
+      *out_length = 0;
     return NULL;
   }
-  if (out_length) *out_length = r->inner->n_cones;
+  if (out_length)
+    *out_length = r->inner->n_cones;
   return r->inner->rank_list;
 }
 

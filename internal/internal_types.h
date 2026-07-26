@@ -32,41 +32,61 @@ typedef enum {
   CONE_BATCH_KIND_CUSTOM = 1,
 } cone_batch_kind_t;
 
-
 typedef struct {
   // Per-cone descriptors (length parent->n_cones).
-  int max_rank;               // cached max(rank_c)
-  int *blk_idx_h;             // [n_cones] original blk index (0..state->n_blks)
-  int *d_blk_idx;             // [n_cones] device mirror; batched
-                              // segmented-dot uses this to scatter into
-                              // the correct d_p2_per_cone slot
-  int *d_ranks;               // [n_cones]
-  long long *d_R_offsets;     // [n_cones] offsets into low_rank_solution
-  long long *d_G_offsets;     // [n_cones] offsets into low_rank_gradient
-  long long *d_D_offsets;     // [n_cones] offsets into low_rank_direction
+  int max_rank;           // cached max(rank_c)
+  int *blk_idx_h;         // [n_cones] original blk index (0..state->n_blks)
+  int *d_blk_idx;         // [n_cones] device mirror; batched
+                          // segmented-dot uses this to scatter into
+                          // the correct d_p2_per_cone slot
+  int *d_ranks;           // [n_cones]
+  long long *d_R_offsets; // [n_cones] offsets into low_rank_solution
+  long long *d_G_offsets; // [n_cones] offsets into low_rank_gradient
+  long long *d_D_offsets; // [n_cones] offsets into low_rank_direction
 
   // Flat sparsity for matSpA (constraint pattern) across cones in batch.
   int total_nnz_A;
-  int *d_entry_cone_A;        // [total_nnz_A] cone idx in [0, n_cones)
+  int *d_entry_cone_A; // [total_nnz_A] cone idx in [0, n_cones)
   int *d_entry_row_A;
   int *d_entry_col_A;
-  int *d_entry_compat_A;      // global scatter target
-  int *d_entry_A_to_flatS;    // matching index in d_flat_spS_val
+  int *d_entry_compat_A;   // global scatter target
+  int *d_entry_A_to_flatS; // matching index in d_flat_spS_val
 
   // Flat sparsity for matSpS (objective union pattern)
   int total_nnz_S;
   int *d_entry_cone_S;
   int *d_entry_row_S;
   int *d_entry_col_S;
-  int *d_cone_S_offsets;      // [n_cones+1]
+  int *d_cone_S_offsets; // [n_cones+1]
 
   double *d_flat_objval_S;
   double *d_flat_spS_val;
 
   // Per-cone matSpS row_ptr flattened (within-cone offsets concatenated).
   int *d_S_row_ptr_flat;
-  int *d_S_row_ptr_offsets;   // [n_cones+1]
+  int *d_S_row_ptr_offsets; // [n_cones+1]
+
+  // Signed low-rank data for the custom batch. Factor storage remains owned
+  // by each member cone; the batch stores compact metadata and device pointers
+  // so one warp-batched launch can process cones with different ranks.
+  int total_lr_columns;
+  int *d_lr_cone_offsets; // [n_cones+1], offsets into flattened LR columns
+  int *d_lr_column_cone;  // [total_lr_columns]
+  int *d_lr_constraints;  // [total_lr_columns], -1 denotes objective
+  double *d_lr_weights;   // [total_lr_columns]
+  double **d_lr_factors;  // [n_cones], member-cone factor matrices
 } cone_batch_data_t;
+
+typedef struct {
+  int num_columns;
+  int dim;
+  int *column_constraint;
+  double *factors;
+  double *weights;
+  double *projection;
+  double *projection_aux;
+  int projection_rank_capacity;
+} low_rank_block_data_t;
 
 typedef enum {
   LBFGS_GRAD_CONVERGED = 0,
@@ -109,16 +129,16 @@ typedef struct {
 } grid_context_t;
 
 typedef struct {
-    compressed_sdp_problem_t *scaled_problem;
-    double *constraint_rescaling;
-    double *psd_cone_rescaling;       // [Σ blk_dims], per-X-row factor d^(b)[i]
-    double *lp_variable_rescaling;
-    double *free_variable_rescaling;
-    double  objective_vector_rescaling;
-    double  right_hand_side_rescaling;
-    double  unscaled_right_hand_side_norm;
-    double  unscaled_objective_vector_norm;
-    double  rescaling_time_sec;
+  compressed_sdp_problem_t *scaled_problem;
+  double *constraint_rescaling;
+  double *psd_cone_rescaling; // [Σ blk_dims], per-X-row factor d^(b)[i]
+  double *lp_variable_rescaling;
+  double *free_variable_rescaling;
+  double objective_vector_rescaling;
+  double right_hand_side_rescaling;
+  double unscaled_right_hand_side_norm;
+  double unscaled_objective_vector_norm;
+  double rescaling_time_sec;
 } rescale_info_t;
 
 typedef struct {
@@ -159,6 +179,9 @@ typedef struct {
 
   // Specialized for Batched Cone
   cone_batch_data_t *bdata;
+
+  // Optional sparse-plus-low-rank operator data for this cone.
+  low_rank_block_data_t *lr_data;
 } block_low_rank_state_t;
 
 typedef struct {
@@ -178,6 +201,7 @@ typedef struct {
   sparse_csr_matrix_t *constraint_matrix;
   sparse_csr_matrix_t *constraint_matrix_t;
   sparse_vector_t *objective_vector_sparse;
+  symmetric_low_rank_data_t *low_rank_data;
   double *right_hand_side;
 
   // Low Rank Struct
@@ -237,10 +261,10 @@ typedef struct {
   double *constraint_rescaling;
   double *lp_variable_rescaling;
   double *free_variable_rescaling;
-  double  objective_vector_rescaling;
-  double  right_hand_side_rescaling;
-  double  unscaled_right_hand_side_norm;
-  double  unscaled_objective_vector_norm;
+  double objective_vector_rescaling;
+  double right_hand_side_rescaling;
+  double unscaled_right_hand_side_norm;
+  double unscaled_objective_vector_norm;
   double *q0_unscaled_buf;
 
   // Residual And Parameter
@@ -315,6 +339,11 @@ typedef struct {
   int gap_stall_count;
   int consecutive_gate_pass;
   int force_augment_this_iter;
+
+  // q1 supplies the multiplier coefficients for matrix-free low-rank slack
+  // actions. Objective columns are included for dual/AL slack and excluded
+  // for penalty-only actions.
+  int low_rank_slack_include_objective;
 } cardal_sdp_solver_state_t;
 
 #ifdef __cplusplus

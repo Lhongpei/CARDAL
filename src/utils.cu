@@ -2,14 +2,13 @@
  * Copyright 2026 Hongpei Li
  */
 
-
 #include "internal_types.h"
 #include "sdp_types.h"
 #include "utils.h"
-#include <math.h>
-#include <random>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
+#include <random>
 #include <string.h>
 
 std::mt19937 gen(1);
@@ -20,10 +19,12 @@ const double HOST_ZERO = 0.0;
 
 int g_log_verbose = 3;
 
-#define CARDAL_RULE                                                             \
-  "================================================================================"
-#define CARDAL_LOG_RULE                                                         \
-  "----------------------------------------------------------------------------" \
+#define CARDAL_RULE                                                            \
+  "==========================================================================" \
+  "======"
+#define CARDAL_LOG_RULE                                                        \
+  "--------------------------------------------------------------------------" \
+  "--"                                                                         \
   "--------------------"
 
 void print_cardal_banner(void) {
@@ -107,8 +108,8 @@ void print_runtime_environment_section(int verbose_floor, int is_distributed,
     int k = (cone_dims > 0) ? cone_dims : 1;
     if (row_dims > 0 && rank_dims > 0) {
       if (k > 1)
-        snprintf(grid_buf, sizeof(grid_buf),
-                 "%d x %d x %d (row x rank x cone)", row_dims, rank_dims, k);
+        snprintf(grid_buf, sizeof(grid_buf), "%d x %d x %d (row x rank x cone)",
+                 row_dims, rank_dims, k);
       else
         snprintf(grid_buf, sizeof(grid_buf), "%d x %d (row x rank)", row_dims,
                  rank_dims);
@@ -130,8 +131,7 @@ void print_parameters_section(const cardal_parameters_t *params,
                params->termination_criteria.eps_dual_relative);
   print_kv_dbl("Tol (gap)", "%.1e",
                params->termination_criteria.eps_optimal_relative);
-  print_kv_int("Outer iter cap",
-               params->termination_criteria.iteration_limit);
+  print_kv_int("Outer iter cap", params->termination_criteria.iteration_limit);
   print_kv_int("Inner iter cap", (long long)params->inner_iterations_limit);
   print_kv_dbl("Penalty factor", "%.3g", params->penalty_factor);
   print_kv_dbl("Max penalty rho", "%.2e", params->max_penalty_coef);
@@ -155,9 +155,8 @@ void print_parameters_section(const cardal_parameters_t *params,
   else if (params->augmentation_mode == AUGMENTATION_MODE_SDP)
     augmentation_mode = "sdp";
   print_kv_str("Augmentation", augmentation_mode);
-  print_kv_str("Initial rho", params->initial_penalty_coef > 0
-                                  ? "Fixed"
-                                  : "Auto (2/sqrt N)");
+  print_kv_str("Initial rho",
+               params->initial_penalty_coef > 0 ? "Fixed" : "Auto (2/sqrt N)");
 }
 
 void print_problem_statistics_section(const compressed_sdp_problem_t *prob,
@@ -172,6 +171,8 @@ void print_problem_statistics_section(const compressed_sdp_problem_t *prob,
   print_kv_int("PSD cones", prob->n_blks);
   if (prob->constraint_matrix != NULL)
     print_kv_int("Constraint NNZ", prob->constraint_matrix->num_nonzeros);
+  if (prob->low_rank_data != NULL)
+    print_kv_int("Low-rank columns", prob->low_rank_data->num_columns);
 
   if (prob->n_blks > 0) {
     int n_cones = prob->n_blks;
@@ -235,8 +236,8 @@ void print_optimization_footer(const sdp_result_t *result,
 void *safe_malloc(size_t size) {
   void *ptr = malloc(size);
   if (ptr == NULL) {
-    fprintf(stderr, "Fatal: malloc(%zu bytes / %.2f GB) failed: %s\n",
-            size, size / 1e9, strerror(errno));
+    fprintf(stderr, "Fatal: malloc(%zu bytes / %.2f GB) failed: %s\n", size,
+            size / 1e9, strerror(errno));
     exit(EXIT_FAILURE);
   }
   return ptr;
@@ -352,6 +353,14 @@ void free_compressed_sdp(compressed_sdp_problem_t *prob) {
       free(prob->objective_vector_sparse->val);
     free(prob->objective_vector_sparse);
   }
+  if (prob->low_rank_data) {
+    free(prob->low_rank_data->constraint_ind);
+    free(prob->low_rank_data->cone_ind);
+    free(prob->low_rank_data->factor_ptr);
+    free(prob->low_rank_data->factor_values);
+    free(prob->low_rank_data->weights);
+    free(prob->low_rank_data);
+  }
   free(prob);
 }
 
@@ -395,8 +404,8 @@ static inline int find_compact_idx(const long long *arr, int size,
 
 compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
 
-  compressed_sdp_problem_t *prob =
-      (compressed_sdp_problem_t *)safe_malloc(sizeof(compressed_sdp_problem_t));
+  compressed_sdp_problem_t *prob = (compressed_sdp_problem_t *)safe_calloc(
+      1, sizeof(compressed_sdp_problem_t));
 
   // 1. Basic Setup & Dimensions
   prob->num_constraints = input->m;
@@ -419,8 +428,9 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
 
   // PASS 1: active-set discovery for PSD.
   int max_possible_vars = 2 * input->nnz_psd_constr;
-  long long *temp_col_mapping =
-      (long long *)safe_malloc(max_possible_vars * sizeof(long long));
+  long long *temp_col_mapping = (long long *)safe_malloc(
+      (size_t)(max_possible_vars > 0 ? max_possible_vars : 1) *
+      sizeof(long long));
   int active_vars_count = 0;
 
 #define CHECK_AND_MAP(blk, r, c)                                               \
@@ -447,6 +457,7 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
   qsort(temp_col_mapping, active_vars_count, sizeof(long long), cmp_ll_asc);
 
   int unique_count = 0;
+  int low_rank_dummy = 0;
   if (active_vars_count > 0) {
     unique_count = 1;
     for (int i = 1; i < active_vars_count; i++) {
@@ -454,6 +465,16 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
         temp_col_mapping[unique_count++] = temp_col_mapping[i];
       }
     }
+  } else if (input->n_cones > 0 && input->low_rank_data != NULL &&
+             input->low_rank_data->num_columns > 0 && input->lp_dim == 0 &&
+             input->free_dim == 0) {
+    /*
+     * cuSPARSE dense/CSR descriptors require a nonzero active dimension.
+     * A low-rank-only SDP has no sparse active entries, so retain one harmless
+     * zero column in the first cone as a descriptor anchor.
+     */
+    unique_count = 1;
+    low_rank_dummy = 1;
   }
 
   prob->lp_start_idx = unique_count;
@@ -463,8 +484,11 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
   prob->col_mapping =
       (long long *)safe_malloc(prob->n_active_vars * sizeof(long long));
   if (unique_count > 0) {
-    memcpy(prob->col_mapping, temp_col_mapping,
-           unique_count * sizeof(long long));
+    if (low_rank_dummy)
+      prob->col_mapping[0] = prob->blk_ptr[0];
+    else
+      memcpy(prob->col_mapping, temp_col_mapping,
+             unique_count * sizeof(long long));
   }
 
   for (int i = 0; i < prob->lp_dim; i++) {
@@ -658,6 +682,34 @@ compressed_sdp_problem_t *convert_to_compressed(basic_sdp_t *input) {
   if (input->free_objective && prob->free_dim > 0) {
     memcpy(prob->free_objective_vector, input->free_objective,
            prob->free_dim * sizeof(double));
+  }
+
+  if (input->low_rank_data && input->low_rank_data->num_columns > 0) {
+    const symmetric_low_rank_data_t *src = input->low_rank_data;
+    symmetric_low_rank_data_t *dst = (symmetric_low_rank_data_t *)safe_calloc(
+        1, sizeof(symmetric_low_rank_data_t));
+    dst->num_columns = src->num_columns;
+    dst->constraint_ind =
+        (int *)safe_malloc((size_t)src->num_columns * sizeof(int));
+    dst->cone_ind = (int *)safe_malloc((size_t)src->num_columns * sizeof(int));
+    dst->factor_ptr = (long long *)safe_malloc((size_t)(src->num_columns + 1) *
+                                               sizeof(long long));
+    dst->weights =
+        (double *)safe_malloc((size_t)src->num_columns * sizeof(double));
+    memcpy(dst->constraint_ind, src->constraint_ind,
+           (size_t)src->num_columns * sizeof(int));
+    memcpy(dst->cone_ind, src->cone_ind,
+           (size_t)src->num_columns * sizeof(int));
+    memcpy(dst->factor_ptr, src->factor_ptr,
+           (size_t)(src->num_columns + 1) * sizeof(long long));
+    memcpy(dst->weights, src->weights,
+           (size_t)src->num_columns * sizeof(double));
+    long long factor_count = src->factor_ptr[src->num_columns];
+    dst->factor_values =
+        (double *)safe_malloc((size_t)factor_count * sizeof(double));
+    memcpy(dst->factor_values, src->factor_values,
+           (size_t)factor_count * sizeof(double));
+    prob->low_rank_data = dst;
   }
 
   // --- Dense Allocations (RHS) ---

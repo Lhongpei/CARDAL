@@ -30,7 +30,7 @@ extern "C" {
  * ----------------------------------------------------------------------- */
 
 typedef struct cardal_problem cardal_problem;
-typedef struct cardal_result  cardal_result;
+typedef struct cardal_result cardal_result;
 
 typedef enum {
   CARDAL_AUGMENTATION_RANDOM = 0,
@@ -56,33 +56,33 @@ typedef enum {
 typedef struct {
   /* Independent relative termination tolerances. The solver stops when the
      primal residual, dual residual, and objective gap all clear. */
-  double eps_primal_relative;       /* default 1e-4 */
-  double eps_dual_relative;         /* default 1e-4 */
-  double eps_optimal_relative;      /* objective-gap tolerance; default 1e-4 */
-  double time_sec_limit;            /* default 3600.0; 0.0 disables */
-  int    iteration_limit;           /* default 20000000 (outer ALM cap) */
+  double eps_primal_relative;  /* default 1e-4 */
+  double eps_dual_relative;    /* default 1e-4 */
+  double eps_optimal_relative; /* objective-gap tolerance; default 1e-4 */
+  double time_sec_limit;       /* default 3600.0; 0.0 disables */
+  int iteration_limit;         /* default 20000000 (outer ALM cap) */
 
   /* Burer–Monteiro rank management. -1 => auto. */
-  int    initial_rank;              /* auto: ceil(2*log m) */
-  int    max_rank;                  /* auto: Pataki bound */
-  int    augmentation_mode;         /* cardal_augmentation_mode; default random */
+  int initial_rank;      /* auto: ceil(2*log m) */
+  int max_rank;          /* auto: Pataki bound */
+  int augmentation_mode; /* cardal_augmentation_mode; default random */
 
   /* Inner solver + penalty schedule. */
-  int    lbfgs_history_size;        /* default 5 */
-  double penalty_factor;            /* default 3.3 */
-  double initial_penalty_coef;      /* -1.0 => auto (2/sqrt N) */
-  double max_penalty_coef;          /* default 5e5 */
-  long   inner_iterations_limit;    /* default 30000 (per outer iter cap) */
+  int lbfgs_history_size;      /* default 5 */
+  double penalty_factor;       /* default 3.3 */
+  double initial_penalty_coef; /* -1.0 => auto (2/sqrt N) */
+  double max_penalty_coef;     /* default 5e5 */
+  long inner_iterations_limit; /* default 30000 (per outer iter cap) */
 
   /* Logging. 0=silent, 1=banner+summary, 2=+iter table, 3=debug. */
-  int    verbose;
+  int verbose;
 
   /* Preconditioning and scaling. Boolean fields use 0=false, 1=true. */
-  int    l_inf_ruiz_iterations;       /* default 10; 0 disables */
-  int    pock_chambolle_rescaling;    /* default 1 */
-  double pock_chambolle_alpha;        /* default 1.0 */
-  int    bound_objective_rescaling;   /* default 1 */
-  int    psd_scale_mode;              /* cardal_psd_scale_mode */
+  int l_inf_ruiz_iterations;     /* default 10; 0 disables */
+  int pock_chambolle_rescaling;  /* default 1 */
+  double pock_chambolle_alpha;   /* default 1.0 */
+  int bound_objective_rescaling; /* default 1 */
+  int psd_scale_mode;            /* cardal_psd_scale_mode */
 } cardal_params;
 
 /* -----------------------------------------------------------------------
@@ -90,11 +90,11 @@ typedef struct {
  * ----------------------------------------------------------------------- */
 
 typedef enum {
-  CARDAL_STATUS_UNSPECIFIED     = 0,
-  CARDAL_STATUS_OPTIMAL         = 1,
-  CARDAL_STATUS_TIME_LIMIT      = 2,
+  CARDAL_STATUS_UNSPECIFIED = 0,
+  CARDAL_STATUS_OPTIMAL = 1,
+  CARDAL_STATUS_TIME_LIMIT = 2,
   CARDAL_STATUS_ITERATION_LIMIT = 3,
-  CARDAL_STATUS_USER_INTERRUPT  = 4
+  CARDAL_STATUS_USER_INTERRUPT = 4
 } cardal_status;
 
 /* -----------------------------------------------------------------------
@@ -111,18 +111,18 @@ typedef enum {
 
 void cardal_request_cancel(void);
 void cardal_clear_cancel(void);
-int  cardal_cancel_requested(void);
+int cardal_cancel_requested(void);
 
 /* -----------------------------------------------------------------------
  * Error codes returned by APIs that don't naturally return a handle.
  * ----------------------------------------------------------------------- */
 
 typedef enum {
-  CARDAL_OK             = 0,
-  CARDAL_E_NULL_ARG     = 1,
-  CARDAL_E_FILE_IO      = 2,
-  CARDAL_E_PARSE        = 3,
-  CARDAL_E_INTERNAL     = 4
+  CARDAL_OK = 0,
+  CARDAL_E_NULL_ARG = 1,
+  CARDAL_E_FILE_IO = 2,
+  CARDAL_E_PARSE = 3,
+  CARDAL_E_INTERNAL = 4
 } cardal_error;
 
 /* -----------------------------------------------------------------------
@@ -173,45 +173,68 @@ cardal_problem *cardal_read_sdpa(const char *path, cardal_error *err_out);
  */
 typedef struct {
   /* Sizes */
-  int  num_constraints;   /* m — length of b */
-  int  num_cones;         /* p — length of blk_dims (0 allowed) */
-  int  lp_dim;            /* nonnegative variables */
-  int  free_dim;          /* unrestricted real variables */
-  const int    *blk_dims; /* length num_cones */
+  int num_constraints; /* m — length of b */
+  int num_cones;       /* p — length of blk_dims (0 allowed) */
+  int lp_dim;          /* nonnegative variables */
+  int free_dim;        /* unrestricted real variables */
+  const int *blk_dims; /* length num_cones */
 
   /* Objective C — sparse COO over (cone, row, col, val) */
-  int           nnz_c;
-  const int    *c_cone_ind;   /* length nnz_c, in [0, num_cones) */
-  const int    *c_row_ind;    /* length nnz_c, in [0, blk_dims[cone]) */
-  const int    *c_col_ind;    /* length nnz_c */
-  const double *c_val;        /* length nnz_c */
+  int nnz_c;
+  const int *c_cone_ind; /* length nnz_c, in [0, num_cones) */
+  const int *c_row_ind;  /* length nnz_c, in [0, blk_dims[cone]) */
+  const int *c_col_ind;  /* length nnz_c */
+  const double *c_val;   /* length nnz_c */
 
   /* Constraints A_i — sparse COO over (constr, cone, row, col, val) */
-  int           nnz_a;
-  const int    *a_constr_ind; /* length nnz_a, in [0, num_constraints) */
-  const int    *a_cone_ind;   /* length nnz_a, in [0, num_cones) */
-  const int    *a_row_ind;    /* length nnz_a */
-  const int    *a_col_ind;    /* length nnz_a */
-  const double *a_val;        /* length nnz_a */
+  int nnz_a;
+  const int *a_constr_ind; /* length nnz_a, in [0, num_constraints) */
+  const int *a_cone_ind;   /* length nnz_a, in [0, num_cones) */
+  const int *a_row_ind;    /* length nnz_a */
+  const int *a_col_ind;    /* length nnz_a */
+  const double *a_val;     /* length nnz_a */
+
+  /* Signed low-rank PSD data.
+   *
+   * A low-rank term is U diag(weights) U^T. Terms may have different ranks
+   * and cone dimensions. Factor matrices are packed term-by-term in
+   * column-major order; weights are packed in the same term order.
+   *
+   * This representation permits indefinite symmetric matrices because the
+   * weights may be negative. A general U D U^T can be converted once by
+   * diagonalizing the small symmetric matrix D.
+   */
+  int num_c_lr_terms;
+  const int *c_lr_cone_ind;   /* length num_c_lr_terms */
+  const int *c_lr_rank;       /* length num_c_lr_terms */
+  const double *c_lr_factors; /* sum blk_dims[cone] * rank */
+  const double *c_lr_weights; /* sum rank */
+
+  int num_a_lr_terms;
+  const int *a_lr_constr_ind; /* length num_a_lr_terms */
+  const int *a_lr_cone_ind;   /* length num_a_lr_terms */
+  const int *a_lr_rank;       /* length num_a_lr_terms */
+  const double *a_lr_factors; /* sum blk_dims[cone] * rank */
+  const double *a_lr_weights; /* sum rank */
 
   /* LP objective (dense) — NULL iff lp_dim == 0 */
-  const double *lp_obj;       /* length lp_dim */
+  const double *lp_obj; /* length lp_dim */
 
   /* LP constraints — sparse COO over (constr, col, val), NULL iff nnz_lp==0 */
-  int           nnz_lp;
-  const int    *lp_constr_ind; /* length nnz_lp, in [0, num_constraints) */
-  const int    *lp_col_ind;    /* length nnz_lp, in [0, lp_dim) */
-  const double *lp_val;        /* length nnz_lp */
+  int nnz_lp;
+  const int *lp_constr_ind; /* length nnz_lp, in [0, num_constraints) */
+  const int *lp_col_ind;    /* length nnz_lp, in [0, lp_dim) */
+  const double *lp_val;     /* length nnz_lp */
 
   /* Free-variable objective and constraints */
-  const double *free_obj;       /* length free_dim, NULL iff free_dim == 0 */
-  int           nnz_free;
-  const int    *free_constr_ind; /* length nnz_free */
-  const int    *free_col_ind;    /* length nnz_free, in [0, free_dim) */
-  const double *free_val;        /* length nnz_free */
+  const double *free_obj; /* length free_dim, NULL iff free_dim == 0 */
+  int nnz_free;
+  const int *free_constr_ind; /* length nnz_free */
+  const int *free_col_ind;    /* length nnz_free, in [0, free_dim) */
+  const double *free_val;     /* length nnz_free */
 
   /* RHS */
-  const double *b;            /* length num_constraints */
+  const double *b; /* length num_constraints */
 } cardal_problem_data;
 
 cardal_problem *cardal_build_problem(const cardal_problem_data *data,
@@ -255,15 +278,15 @@ double cardal_result_rel_dual_residual(const cardal_result *r);
 double cardal_result_rel_objective_gap(const cardal_result *r);
 
 double cardal_result_runtime_sec(const cardal_result *r);
-int    cardal_result_outer_iters(const cardal_result *r);
-int    cardal_result_inner_iters(const cardal_result *r);
+int cardal_result_outer_iters(const cardal_result *r);
+int cardal_result_inner_iters(const cardal_result *r);
 
-int    cardal_result_num_cones(const cardal_result *r);
-int    cardal_result_num_variables(const cardal_result *r);
-int    cardal_result_num_constraints(const cardal_result *r);
+int cardal_result_num_cones(const cardal_result *r);
+int cardal_result_num_variables(const cardal_result *r);
+int cardal_result_num_constraints(const cardal_result *r);
 
 /* Total BM rank across cones (sum of rank_list). */
-int    cardal_result_total_rank(const cardal_result *r);
+int cardal_result_total_rank(const cardal_result *r);
 
 /* Low-rank primal factor V (flattened block-diagonal, column-major per
  * cone). Length written to *out_length; returns NULL if unavailable. */
@@ -271,20 +294,17 @@ const double *cardal_result_primal_factor(const cardal_result *r,
                                           int *out_length);
 
 /* Nonnegative LP primal variables (length = problem lp_dim). */
-const double *cardal_result_lp_primal(const cardal_result *r,
-                                      int *out_length);
+const double *cardal_result_lp_primal(const cardal_result *r, int *out_length);
 
 /* Unrestricted primal variables (length = problem free_dim). */
 const double *cardal_result_free_primal(const cardal_result *r,
                                         int *out_length);
 
 /* Dual solution y (length = num_constraints). */
-const double *cardal_result_dual(const cardal_result *r,
-                                 int *out_length);
+const double *cardal_result_dual(const cardal_result *r, int *out_length);
 
 /* Per-cone BM rank list (length = num_cones). */
-const int    *cardal_result_rank_list(const cardal_result *r,
-                                      int *out_length);
+const int *cardal_result_rank_list(const cardal_result *r, int *out_length);
 
 void cardal_result_free(cardal_result *r);
 

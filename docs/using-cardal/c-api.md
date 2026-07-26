@@ -70,6 +70,19 @@ data.a_row_ind = a_row;
 data.a_col_ind = a_col;
 data.a_val = a_val;
 
+data.num_c_lr_terms = num_c_lr_terms;
+data.c_lr_cone_ind = c_lr_cone;
+data.c_lr_rank = c_lr_rank;
+data.c_lr_factors = c_lr_factors;
+data.c_lr_weights = c_lr_weights;
+
+data.num_a_lr_terms = num_a_lr_terms;
+data.a_lr_constr_ind = a_lr_constraint;
+data.a_lr_cone_ind = a_lr_cone;
+data.a_lr_rank = a_lr_rank;
+data.a_lr_factors = a_lr_factors;
+data.a_lr_weights = a_lr_weights;
+
 data.lp_obj = lp_obj;
 data.nnz_lp = nnz_lp;
 data.lp_constr_ind = lp_constraint;
@@ -91,6 +104,13 @@ All coordinate indices are zero-based. PSD coordinates contain one triangle
 per symmetric block, normally `row >= col`. LP and free constraint entries use
 `(constraint, column, value)` COO arrays. CARDAL copies all supplied arrays;
 the caller may release them after `cardal_build_problem` returns.
+
+Each low-rank term represents `U * diag(weights) * U^T`. Ranks are stored per
+term. Factor matrices are concatenated term by term in column-major order, and
+weights are concatenated in the same order. Signed weights are supported. A
+general small symmetric core `D` can be diagonalized by the caller once and
+absorbed into `U` before construction. Sparse COO and low-rank terms are added
+together when both are present for the same block.
 
 ## Problem functions
 

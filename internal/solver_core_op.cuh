@@ -6,10 +6,11 @@
 #define SOLVER_CORE_OP_CUH
 
 #include "batched_cone_ops.h"
+#include "low_rank_op.h"
 #include "rank_lift.h"
+#include "sdp_op.h"
 #include "solver_state.h"
 #include "utils.h"
-#include "sdp_op.h"
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <curand.h>
@@ -97,8 +98,7 @@ static __device__ double cubic_function_val(double a, double b, double c,
 
 static __global__ void
 solve_line_search_tau_kernel(double *__restrict__ scalars, double penalty,
-                             int tau_slot, int tau_sq_slot,
-                             double tau_max_in) {
+                             int tau_slot, int tau_sq_slot, double tau_max_in) {
   if (threadIdx.x != 0 || blockIdx.x != 0)
     return;
   double q2q2 = scalars[0];
@@ -221,12 +221,14 @@ static inline double COMPUTE_LP_MIN_SLACK(cardal_sdp_solver_state_t *state) {
 #endif
 
   if (state->lp_variable_rescaling != NULL) {
-    int blocks_s =
-        (state->lp_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    int blocks_s = (state->lp_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     cudaStream_t stream;
     CUBLAS_CHECK(cublasGetStream(state->blas_handle, &stream));
-    double inv_obj = (state->objective_vector_rescaling > 0.0) ? (1.0 / state->objective_vector_rescaling) : 1.0;
-    elementwise_multiply_scaled_kernel<<<blocks_s, THREADS_PER_BLOCK, 0, stream>>>(
+    double inv_obj = (state->objective_vector_rescaling > 0.0)
+                         ? (1.0 / state->objective_vector_rescaling)
+                         : 1.0;
+    elementwise_multiply_scaled_kernel<<<blocks_s, THREADS_PER_BLOCK, 0,
+                                         stream>>>(
         d_lp_slack, state->lp_variable_rescaling, inv_obj, state->lp_dim);
   }
 
@@ -259,35 +261,34 @@ COMPUTE_FREE_STATIONARITY(cardal_sdp_solver_state_t *state) {
   CUBLAS_CHECK(cublasDcopy(state->blas_handle, state->free_dim,
                            state->free_objective_vector, 1, d_stationarity, 1));
   double alpha = 1.0;
-  CUBLAS_CHECK(cublasDaxpy(
-      state->blas_handle, state->free_dim, &alpha,
-      state->dual_product + state->free_start_active_idx, 1, d_stationarity,
-      1));
+  CUBLAS_CHECK(cublasDaxpy(state->blas_handle, state->free_dim, &alpha,
+                           state->dual_product + state->free_start_active_idx,
+                           1, d_stationarity, 1));
 
 #ifdef IS_DISTRIBUTED
   if (state->grid_context != NULL && state->grid_context->dims[0] > 1) {
-    NCCL_CHECK(ncclAllReduce(
-        d_stationarity, d_stationarity, state->free_dim, ncclDouble, ncclSum,
-        state->grid_context->nccl_row, 0));
+    NCCL_CHECK(ncclAllReduce(d_stationarity, d_stationarity, state->free_dim,
+                             ncclDouble, ncclSum, state->grid_context->nccl_row,
+                             0));
   }
 #endif
 
   if (state->free_variable_rescaling != NULL) {
-    int blocks =
-        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    int blocks = (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     cudaStream_t stream;
     CUBLAS_CHECK(cublasGetStream(state->blas_handle, &stream));
     double inv_obj = (state->objective_vector_rescaling > 0.0)
                          ? (1.0 / state->objective_vector_rescaling)
                          : 1.0;
-    elementwise_multiply_scaled_kernel<<<blocks, THREADS_PER_BLOCK, 0, stream>>>(
+    elementwise_multiply_scaled_kernel<<<blocks, THREADS_PER_BLOCK, 0,
+                                         stream>>>(
         d_stationarity, state->free_variable_rescaling, inv_obj,
         state->free_dim);
   }
 
   int max_idx = 0;
-  CUBLAS_CHECK(cublasIdamax(state->blas_handle, state->free_dim,
-                            d_stationarity, 1, &max_idx));
+  CUBLAS_CHECK(cublasIdamax(state->blas_handle, state->free_dim, d_stationarity,
+                            1, &max_idx));
   double max_abs = 0.0;
   if (max_idx > 0) {
     CUDA_CHECK(cudaMemcpy(&max_abs, d_stationarity + max_idx - 1,
@@ -317,7 +318,7 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
   unsigned long long base_seed =
       1234ULL + (unsigned long long)state->num_outer_iteration * 1000003ULL +
       (unsigned long long)blk_idx * 2654435761ULL;
-      
+
   CURAND_CHECK(curandSetPseudoRandomGeneratorSeed(local_gen, base_seed));
   {
     int rand_len = (dim % 2 == 0) ? dim : dim + 1;
@@ -326,8 +327,8 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
     } else {
       double *d_temp_rand;
       CUDA_CHECK(cudaMalloc(&d_temp_rand, rand_len * sizeof(double)));
-      CURAND_CHECK(
-          curandGenerateNormalDouble(local_gen, d_temp_rand, rand_len, 0.0, 1.0));
+      CURAND_CHECK(curandGenerateNormalDouble(local_gen, d_temp_rand, rand_len,
+                                              0.0, 1.0));
       CUDA_CHECK(cudaMemcpy(d_q, d_temp_rand, dim * sizeof(double),
                             cudaMemcpyDeviceToDevice));
       CUDA_CHECK(cudaFree(d_temp_rand));
@@ -341,11 +342,14 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
   size_t bufferSize = 0;
   void *dBuffer = NULL;
   double spmv_alpha = 1.0, spmv_beta = 0.0;
-  CUSPARSE_CHECK(cusparseSpMV_bufferSize(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_alpha,
-      blk->matSpS, vec_q, &spmv_beta, vec_Sq, CUDA_R_64F,
-      CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
-  CUDA_CHECK(cudaMalloc(&dBuffer, bufferSize));
+  if (blk->matSpS != NULL) {
+    CUSPARSE_CHECK(cusparseSpMV_bufferSize(
+        state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_alpha,
+        blk->matSpS, vec_q, &spmv_beta, vec_Sq, CUDA_R_64F,
+        CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
+    if (bufferSize > 0)
+      CUDA_CHECK(cudaMalloc(&dBuffer, bufferSize));
+  }
 
   double norm_q;
   CUBLAS_CHECK(cublasDnrm2(state->blas_handle, dim, d_q, 1, &norm_q));
@@ -388,8 +392,8 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
     } else {
       double *d_temp_rand;
       CUDA_CHECK(cudaMalloc(&d_temp_rand, rand_len * sizeof(double)));
-      CURAND_CHECK(
-          curandGenerateNormalDouble(local_gen, d_temp_rand, rand_len, 0.0, 1.0));
+      CURAND_CHECK(curandGenerateNormalDouble(local_gen, d_temp_rand, rand_len,
+                                              0.0, 1.0));
       CUDA_CHECK(cudaMemcpy(d_q, d_temp_rand, dim * sizeof(double),
                             cudaMemcpyDeviceToDevice));
       CUDA_CHECK(cudaFree(d_temp_rand));
@@ -472,144 +476,147 @@ COMPUTE_NEGATIVE_EIGEN_POWER_ITER(cardal_sdp_solver_state_t *state, int blk_idx,
   CUDA_CHECK(cudaFree(d_q));
   CUDA_CHECK(cudaFree(d_Sq));
   CUDA_CHECK(cudaFree(d_v));
-  CUDA_CHECK(cudaFree(dBuffer));
+  if (dBuffer)
+    CUDA_CHECK(cudaFree(dBuffer));
   CUSPARSE_CHECK(cusparseDestroyDnVec(vec_q));
   CUSPARSE_CHECK(cusparseDestroyDnVec(vec_Sq));
 
   return neg_count;
 }
 
-
-static inline void
-COMPUTE_BM_HVP_PERCONE(cardal_sdp_solver_state_t *state,
-                       block_low_rank_state_t *blk,
-                       cusparseDnMatDescr_t matV_descr,
-                       cusparseDnMatDescr_t matHV_descr,
-                       double *d_HV,
-                       double *d_saved_S_val) {
+static inline void COMPUTE_BM_HVP_PERCONE(cardal_sdp_solver_state_t *state,
+                                          block_low_rank_state_t *blk,
+                                          cusparseDnMatDescr_t matV_descr,
+                                          cusparseDnMatDescr_t matHV_descr,
+                                          double *d_V, double *d_HV,
+                                          double *d_saved_S_val) {
 #ifndef IS_DISTRIBUTED
-  (void)d_HV;  // Only referenced from nccl_row/nccl_rank Allreduce calls
-               // under IS_DISTRIBUTED; unused in single-GPU builds.
+  (void)d_HV; // Only referenced from nccl_row/nccl_rank Allreduce calls
+              // under IS_DISTRIBUTED; unused in single-GPU builds.
 #endif
-  int nnz_A = blk->constraint_sparse_pattern->num_nonzeros;
+  int nnz_A = blk->constraint_sparse_pattern
+                  ? blk->constraint_sparse_pattern->num_nonzeros
+                  : 0;
   int nnz_Union =
-      blk->objective_union_constraint_sparse_pattern->num_nonzeros;
+      blk->objective_union_constraint_sparse_pattern
+          ? blk->objective_union_constraint_sparse_pattern->num_nonzeros
+          : 0;
   double rho = state->penalty_coef;
 
-  CUDA_CHECK(cudaMemcpyAsync(
-      d_saved_S_val, blk->objective_union_constraint_sparse_pattern->val,
-      nnz_Union * sizeof(double), cudaMemcpyDeviceToDevice, 0));
-
-
-  double t1_alpha = 2.0, t1_beta = 0.0;
-  CUSPARSE_CHECK(cusparseSpMM(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-      CUSPARSE_OPERATION_NON_TRANSPOSE, &t1_alpha, blk->matSpS, matV_descr,
-      &t1_beta, matHV_descr, CUDA_R_64F, CUSPARSE_SPMM_ALG_DEFAULT,
-      blk->spmm_buffer_S));
-
-  if (nnz_A == 0) {
+  if (nnz_Union > 0) {
     CUDA_CHECK(cudaMemcpyAsync(
-        blk->objective_union_constraint_sparse_pattern->val, d_saved_S_val,
-        nnz_Union * sizeof(double), cudaMemcpyDeviceToDevice, 0));
-#ifdef IS_DISTRIBUTED
-    if (state->grid_context != NULL && state->grid_context->dims[0] > 1) {
-      NCCL_CHECK(ncclAllReduce(d_HV, d_HV,
-                               (size_t)blk->dim * (size_t)blk->rank,
-                               ncclDouble, ncclSum,
-                               state->grid_context->nccl_row, 0));
-    }
-#endif
-    return;
+        d_saved_S_val, blk->objective_union_constraint_sparse_pattern->val,
+        (size_t)nnz_Union * sizeof(double), cudaMemcpyDeviceToDevice, 0));
   }
 
-  // (a) SDDMM(R, V^T) -> matSpA->val[(i,j)] = <R[i,:], V[j,:]>
-  double sd_a = 1.0, sd_b = 0.0;
-  CUSPARSE_CHECK(cusparseSDDMM(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-      CUSPARSE_OPERATION_TRANSPOSE, &sd_a, blk->matR, matV_descr, &sd_b,
-      blk->matSpA, CUDA_R_64F, CUSPARSE_SDDMM_ALG_DEFAULT,
-      blk->sddmm_buffer_A));
-  // (b) accumulate SDDMM(V, R^T) -> matSpA = (R V^T + V R^T) at A's pattern.
-  double sd_b1 = 1.0;
-  CUSPARSE_CHECK(cusparseSDDMM(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-      CUSPARSE_OPERATION_TRANSPOSE, &sd_a, matV_descr, blk->matR, &sd_b1,
-      blk->matSpA, CUDA_R_64F, CUSPARSE_SDDMM_ALG_DEFAULT,
-      blk->sddmm_buffer_A));
+  double t1_alpha = 2.0, t1_beta = 0.0;
+  if (blk->matSpS != NULL) {
+    CUSPARSE_CHECK(
+        cusparseSpMM(state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                     CUSPARSE_OPERATION_NON_TRANSPOSE, &t1_alpha, blk->matSpS,
+                     matV_descr, &t1_beta, matHV_descr, CUDA_R_64F,
+                     CUSPARSE_SPMM_ALG_DEFAULT, blk->spmm_buffer_S));
+  } else {
+    CUDA_CHECK(cudaMemsetAsync(
+        d_HV, 0, (size_t)blk->dim * (size_t)blk->rank * sizeof(double), 0));
+  }
+  /* Term 1: 2 (C + A^*q) V. */
+  low_rank_add_operator_times_matrix(state, blk, state->q1,
+                                     state->low_rank_slack_include_objective,
+                                     d_V, blk->rank, 2.0, d_HV);
+
+  /* q2 = A(R V^T + V R^T). */
+  CUDA_CHECK(cudaMemsetAsync(
+      state->q2, 0, (size_t)state->num_constraints * sizeof(double), 0));
+  if (nnz_A > 0) {
+    double sd_a = 1.0, sd_b = 0.0;
+    CUSPARSE_CHECK(
+        cusparseSDDMM(state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                      CUSPARSE_OPERATION_TRANSPOSE, &sd_a, blk->matR,
+                      matV_descr, &sd_b, blk->matSpA, CUDA_R_64F,
+                      CUSPARSE_SDDMM_ALG_DEFAULT, blk->sddmm_buffer_A));
+    double sd_b1 = 1.0;
+    CUSPARSE_CHECK(
+        cusparseSDDMM(state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                      CUSPARSE_OPERATION_TRANSPOSE, &sd_a, matV_descr,
+                      blk->matR, &sd_b1, blk->matSpA, CUDA_R_64F,
+                      CUSPARSE_SDDMM_ALG_DEFAULT, blk->sddmm_buffer_A));
+
+    CUDA_CHECK(cudaMemsetAsync(state->primal_solution, 0,
+                               state->n_active_vars * sizeof(double), 0));
+    int blocks_A = (nnz_A + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    scatter_sddmm_to_global_kernel<<<blocks_A, THREADS_PER_BLOCK>>>(
+        blk->constraint_sparse_pattern->val, blk->compat_mapping,
+        state->primal_solution, nnz_A);
+
+    double spmv_a = 1.0, spmv_b = 0.0;
+    cusparseDnVecDescr_t vec_q2;
+    CUSPARSE_CHECK(cusparseCreateDnVec(&vec_q2, state->num_constraints,
+                                       state->q2, CUDA_R_64F));
+    CUSPARSE_CHECK(
+        cusparseDnVecSetValues(state->vec_primal_sol, state->primal_solution));
+    CUSPARSE_CHECK(cusparseSpMV(
+        state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_a,
+        state->matA, state->vec_primal_sol, &spmv_b, vec_q2, CUDA_R_64F,
+        CUSPARSE_SPMV_CSR_ALG2, state->primal_spmv_buffer));
+    CUSPARSE_CHECK(cusparseDestroyDnVec(vec_q2));
+  }
+  low_rank_eval_cross(state, blk, blk->solution, d_V, blk->rank, state->q2,
+                      NULL);
+  low_rank_eval_cross(state, blk, d_V, blk->solution, blk->rank, state->q2,
+                      NULL);
 
 #ifdef IS_DISTRIBUTED
-  // Rank-axis: each peer holds slab R^(j), V^(j); the two SDDMMs above
-  // produced R^(j) V^(j)^T + V^(j) R^(j)^T at A's pattern. The true global D
-  // = sum_j (R^(j) V^(j)^T + V^(j) R^(j)^T) requires SUM over rank-axis peers
-  // before scatter into the active-var domain. Without this, every downstream
-  // step (q1, dual_product, matSpS_pert, Term-2 SpMM) uses a per-slab partial.
-  // matSpA wraps blk->constraint_sparse_pattern->val (see solver_state.cu).
-  // TODO: optimize by Allreducing the final dim*k_local HV instead of nnz_A
-  // matSpA (smaller comm volume) — requires Allgather R first.
   if (state->grid_context != NULL && state->grid_context->dims[1] > 1) {
-    NCCL_CHECK(ncclAllReduce(blk->constraint_sparse_pattern->val,
-                             blk->constraint_sparse_pattern->val,
-                             (size_t)nnz_A, ncclDouble, ncclSum,
+    NCCL_CHECK(ncclAllReduce(state->q2, state->q2, state->num_constraints,
+                             ncclDouble, ncclSum,
                              state->grid_context->nccl_rank, 0));
   }
 #endif
 
-  // (c) scatter matSpA->val into primal_solution
-  CUDA_CHECK(cudaMemsetAsync(state->primal_solution, 0,
-                             state->n_active_vars * sizeof(double), 0));
-  int blocks_A = (nnz_A + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-  scatter_sddmm_to_global_kernel<<<blocks_A, THREADS_PER_BLOCK>>>(
-      blk->constraint_sparse_pattern->val, blk->compat_mapping,
-      state->primal_solution, nnz_A);
+  if (nnz_A > 0) {
+    double spmv_a = 1.0, spmv_b = 0.0;
+    cusparseDnVecDescr_t vec_q2;
+    CUSPARSE_CHECK(cusparseCreateDnVec(&vec_q2, state->num_constraints,
+                                       state->q2, CUDA_R_64F));
+    CUSPARSE_CHECK(cusparseSpMV(
+        state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_a,
+        state->matAt, vec_q2, &spmv_b, state->vec_dual_prod, CUDA_R_64F,
+        CUSPARSE_SPMV_CSR_ALG2, state->dual_spmv_buffer));
+    CUSPARSE_CHECK(cusparseDestroyDnVec(vec_q2));
 
-  // (d) q1 = matA_local * primal_solution (local m-slice of A * D)
-  double spmv_a = 1.0, spmv_b = 0.0;
-  CUSPARSE_CHECK(
-      cusparseDnVecSetValues(state->vec_primal_sol, state->primal_solution));
-  CUSPARSE_CHECK(cusparseDnVecSetValues(state->vec_q1, state->q1));
-  CUSPARSE_CHECK(cusparseSpMV(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_a,
-      state->matA, state->vec_primal_sol, &spmv_b, state->vec_q1, CUDA_R_64F,
-      CUSPARSE_SPMV_CSR_ALG2, state->primal_spmv_buffer));
+    CUDA_CHECK(
+        cudaMemsetAsync(blk->objective_union_constraint_sparse_pattern->val, 0,
+                        (size_t)nnz_Union * sizeof(double), 0));
+    int blocks_A = (nnz_A + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    add_Ay_to_S_kernel<<<blocks_A, THREADS_PER_BLOCK>>>(
+        blk->objective_union_constraint_sparse_pattern->val,
+        state->dual_product, blk->compat_mapping,
+        blk->constraint_to_union_mapping, nnz_A);
 
-  // (e) dual_product = matAt_local * q1_local (partial across n_active)
-  CUSPARSE_CHECK(cusparseSpMV(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_a,
-      state->matAt, state->vec_q1, &spmv_b, state->vec_dual_prod, CUDA_R_64F,
-      CUSPARSE_SPMV_CSR_ALG2, state->dual_spmv_buffer));
+    double t2_alpha = 2.0 * rho, t2_beta = 1.0;
+    CUSPARSE_CHECK(
+        cusparseSpMM(state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                     CUSPARSE_OPERATION_NON_TRANSPOSE, &t2_alpha, blk->matSpS,
+                     blk->matR, &t2_beta, matHV_descr, CUDA_R_64F,
+                     CUSPARSE_SPMM_ALG_DEFAULT, blk->spmm_buffer_S));
+  }
+  /* Term 2: 2 rho A^*(A(D)) R. */
+  low_rank_add_operator_times_matrix(state, blk, state->q2, 0, blk->solution,
+                                     blk->rank, 2.0 * rho, d_HV);
 
-
-  // (f) matSpS_pert = add_Ay(dual_product_full) at LOCAL compat_mapping.
-  CUDA_CHECK(cudaMemsetAsync(
-      blk->objective_union_constraint_sparse_pattern->val, 0,
-      nnz_Union * sizeof(double), 0));
-  add_Ay_to_S_kernel<<<blocks_A, THREADS_PER_BLOCK>>>(
-      blk->objective_union_constraint_sparse_pattern->val,
-      state->dual_product, blk->compat_mapping,
-      blk->constraint_to_union_mapping, nnz_A);
-
-
-  // (g) HV += 2 * rho * matSpS_pert_full * R (full Term 2 per rank).
-  double t2_alpha = 2.0 * rho, t2_beta = 1.0;
-  CUSPARSE_CHECK(cusparseSpMM(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-      CUSPARSE_OPERATION_NON_TRANSPOSE, &t2_alpha, blk->matSpS, blk->matR,
-      &t2_beta, matHV_descr, CUDA_R_64F, CUSPARSE_SPMM_ALG_DEFAULT,
-      blk->spmm_buffer_S));
-
-  // (h) restore matSpS partial.
-  CUDA_CHECK(cudaMemcpyAsync(
-      blk->objective_union_constraint_sparse_pattern->val, d_saved_S_val,
-      nnz_Union * sizeof(double), cudaMemcpyDeviceToDevice, 0));
+  if (nnz_Union > 0) {
+    CUDA_CHECK(cudaMemcpyAsync(
+        blk->objective_union_constraint_sparse_pattern->val, d_saved_S_val,
+        (size_t)nnz_Union * sizeof(double), cudaMemcpyDeviceToDevice, 0));
+  }
 
 #ifdef IS_DISTRIBUTED
   // Sum row-partial matHV across nccl_row. Uniform size = dim × rank.
   if (state->grid_context != NULL && state->grid_context->dims[0] > 1) {
-    NCCL_CHECK(ncclAllReduce(d_HV, d_HV,
-                             (size_t)blk->dim * (size_t)blk->rank,
-                             ncclDouble, ncclSum,
-                             state->grid_context->nccl_row, 0));
+    NCCL_CHECK(ncclAllReduce(d_HV, d_HV, (size_t)blk->dim * (size_t)blk->rank,
+                             ncclDouble, ncclSum, state->grid_context->nccl_row,
+                             0));
   }
 #endif
 }
@@ -621,17 +628,20 @@ COMPUTE_BM_HVP_PERCONE(cardal_sdp_solver_state_t *state,
 #ifndef NEGATIVE_CURVATURE_LANCZOS_K
 #define NEGATIVE_CURVATURE_LANCZOS_K 15
 #endif
-static inline int
-FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
-                          double *out_min_eigval, double **out_V_neg) {
+static inline int FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state,
+                                             int blk_idx,
+                                             double *out_min_eigval,
+                                             double **out_V_neg) {
   *out_min_eigval = 0.0;
   *out_V_neg = NULL;
 
   block_low_rank_state_t *blk = state->block_low_rank_state[blk_idx];
-  if (blk->kind == CONE_BATCH_KIND_CUSTOM) return 0;  // batched: skip
+  if (blk->kind == CONE_BATCH_KIND_CUSTOM)
+    return 0; // batched: skip
   int dim = blk->dim;
   int r = blk->rank;
-  if (r <= 0 || dim <= 0) return 0;
+  if (r <= 0 || dim <= 0)
+    return 0;
 
   size_t N = (size_t)dim * (size_t)r;
   int k_target = (N < (size_t)NEGATIVE_CURVATURE_LANCZOS_K)
@@ -640,12 +650,15 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
   int k = k_target;
 
   int nnz_Union =
-      blk->objective_union_constraint_sparse_pattern->num_nonzeros;
+      blk->objective_union_constraint_sparse_pattern
+          ? blk->objective_union_constraint_sparse_pattern->num_nonzeros
+          : 0;
 
   double *d_Q = NULL, *d_v = NULL, *d_saved_S = NULL;
   CUDA_CHECK(cudaMalloc(&d_Q, N * (size_t)k * sizeof(double)));
   CUDA_CHECK(cudaMalloc(&d_v, N * sizeof(double)));
-  CUDA_CHECK(cudaMalloc(&d_saved_S, (size_t)nnz_Union * sizeof(double)));
+  if (nnz_Union > 0)
+    CUDA_CHECK(cudaMalloc(&d_saved_S, (size_t)nnz_Union * sizeof(double)));
 
   double *alpha_arr = (double *)safe_malloc(k * sizeof(double));
   double *beta_arr = (double *)safe_malloc(k * sizeof(double));
@@ -670,8 +683,8 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
     double *tmp;
     CUDA_CHECK(cudaMalloc(&tmp, rand_len * sizeof(double)));
     CURAND_CHECK(curandGenerateNormalDouble(gen, tmp, rand_len, 0.0, 1.0));
-    CUDA_CHECK(cudaMemcpy(d_Q, tmp, N * sizeof(double),
-                          cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(
+        cudaMemcpy(d_Q, tmp, N * sizeof(double), cudaMemcpyDeviceToDevice));
     CUDA_CHECK(cudaFree(tmp));
   }
   curandDestroyGenerator(gen);
@@ -681,9 +694,12 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
   double q0_nrm =
       sqrt(rank_axis_sum_scalar(state, q0_local_nrm * q0_local_nrm));
   if (q0_nrm < 1e-30) {
-    free(alpha_arr); free(beta_arr);
-    CUDA_CHECK(cudaFree(d_Q)); CUDA_CHECK(cudaFree(d_v));
-    CUDA_CHECK(cudaFree(d_saved_S));
+    free(alpha_arr);
+    free(beta_arr);
+    CUDA_CHECK(cudaFree(d_Q));
+    CUDA_CHECK(cudaFree(d_v));
+    if (d_saved_S)
+      CUDA_CHECK(cudaFree(d_saved_S));
     return 0;
   }
   double inv0 = 1.0 / q0_nrm;
@@ -693,10 +709,10 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
 
   // Reusable Dense descriptors that we re-point each Lanczos step.
   cusparseDnMatDescr_t matV_descr, matHV_descr;
-  CUSPARSE_CHECK(cusparseCreateDnMat(&matV_descr, dim, r, dim, d_Q,
-                                     CUDA_R_64F, CUSPARSE_ORDER_COL));
-  CUSPARSE_CHECK(cusparseCreateDnMat(&matHV_descr, dim, r, dim, d_v,
-                                     CUDA_R_64F, CUSPARSE_ORDER_COL));
+  CUSPARSE_CHECK(cusparseCreateDnMat(&matV_descr, dim, r, dim, d_Q, CUDA_R_64F,
+                                     CUSPARSE_ORDER_COL));
+  CUSPARSE_CHECK(cusparseCreateDnMat(&matHV_descr, dim, r, dim, d_v, CUDA_R_64F,
+                                     CUSPARSE_ORDER_COL));
 
   for (int j = 0; j < k; j++) {
     double *q_j = d_Q + (size_t)j * N;
@@ -704,7 +720,7 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
     CUSPARSE_CHECK(cusparseDnMatSetValues(matHV_descr, d_v));
 
     // d_v = H[q_j]
-    COMPUTE_BM_HVP_PERCONE(state, blk, matV_descr, matHV_descr, d_v,
+    COMPUTE_BM_HVP_PERCONE(state, blk, matV_descr, matHV_descr, q_j, d_v,
                            d_saved_S);
 
     if (j > 0) {
@@ -714,12 +730,11 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
           cublasDaxpy(state->blas_handle, (int)N, &mb, qprev, 1, d_v, 1));
     }
     double alpha_local = 0.0;
-    CUBLAS_CHECK(cublasDdot(state->blas_handle, (int)N, q_j, 1, d_v, 1,
-                            &alpha_local));
+    CUBLAS_CHECK(
+        cublasDdot(state->blas_handle, (int)N, q_j, 1, d_v, 1, &alpha_local));
     alpha_arr[j] = rank_axis_sum_scalar(state, alpha_local);
     double ma = -alpha_arr[j];
-    CUBLAS_CHECK(
-        cublasDaxpy(state->blas_handle, (int)N, &ma, q_j, 1, d_v, 1));
+    CUBLAS_CHECK(cublasDaxpy(state->blas_handle, (int)N, &ma, q_j, 1, d_v, 1));
 
     // Full reorth against all previous q_i. proj must be a global dot across
     // rank-axis peers so every peer subtracts the same multiple of q_i.
@@ -745,24 +760,25 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
         break;
       }
       double *q_next = d_Q + (size_t)(j + 1) * N;
-      CUBLAS_CHECK(
-          cublasDcopy(state->blas_handle, (int)N, d_v, 1, q_next, 1));
+      CUBLAS_CHECK(cublasDcopy(state->blas_handle, (int)N, d_v, 1, q_next, 1));
       double inv_b = 1.0 / beta_arr[j + 1];
-      CUBLAS_CHECK(
-          cublasDscal(state->blas_handle, (int)N, &inv_b, q_next, 1));
+      CUBLAS_CHECK(cublasDscal(state->blas_handle, (int)N, &inv_b, q_next, 1));
     }
   }
 
   // Solve tridiagonal eigenproblem
   double *d_diag = (double *)safe_malloc(k * sizeof(double));
   double *d_off = (double *)safe_malloc(k * sizeof(double));
-  for (int i = 0; i < k; i++) d_diag[i] = alpha_arr[i];
+  for (int i = 0; i < k; i++)
+    d_diag[i] = alpha_arr[i];
   d_off[0] = 0.0;
-  for (int i = 0; i < k - 1; i++) d_off[i + 1] = beta_arr[i + 1];
+  for (int i = 0; i < k - 1; i++)
+    d_off[i + 1] = beta_arr[i + 1];
 
   double *Z = (double *)safe_malloc((size_t)k * (size_t)k * sizeof(double));
   memset(Z, 0, (size_t)k * (size_t)k * sizeof(double));
-  for (int i = 0; i < k; i++) Z[i + i * k] = 1.0;
+  for (int i = 0; i < k; i++)
+    Z[i + i * k] = 1.0;
 
   int info = tridiagonal_eigen_solver(k, d_diag, d_off, Z);
   (void)info;
@@ -783,13 +799,14 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
     CUDA_CHECK(cudaMalloc(&d_V_neg, N * sizeof(double)));
     double *d_zmin = NULL;
     CUDA_CHECK(cudaMalloc(&d_zmin, k * sizeof(double)));
-    CUDA_CHECK(cudaMemcpy(d_zmin, Z + (size_t)min_idx * k,
-                          k * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_zmin, Z + (size_t)min_idx * k, k * sizeof(double),
+                          cudaMemcpyHostToDevice));
     double ga = 1.0, gb = 0.0;
     CUBLAS_CHECK(cublasDgemv(state->blas_handle, CUBLAS_OP_N, (int)N, k, &ga,
                              d_Q, (int)N, d_zmin, 1, &gb, d_V_neg, 1));
     double vn_local = 0.0;
-    CUBLAS_CHECK(cublasDnrm2(state->blas_handle, (int)N, d_V_neg, 1, &vn_local));
+    CUBLAS_CHECK(
+        cublasDnrm2(state->blas_handle, (int)N, d_V_neg, 1, &vn_local));
     double vn = sqrt(rank_axis_sum_scalar(state, vn_local * vn_local));
     if (vn > 1e-30) {
       double inv = 1.0 / vn;
@@ -802,19 +819,21 @@ FIND_AL_NEGATIVE_CURVATURE(cardal_sdp_solver_state_t *state, int blk_idx,
 
   CUSPARSE_CHECK(cusparseDestroyDnMat(matV_descr));
   CUSPARSE_CHECK(cusparseDestroyDnMat(matHV_descr));
-  free(alpha_arr); free(beta_arr);
-  free(d_diag); free(d_off); free(Z);
+  free(alpha_arr);
+  free(beta_arr);
+  free(d_diag);
+  free(d_off);
+  free(Z);
   CUDA_CHECK(cudaFree(d_Q));
   CUDA_CHECK(cudaFree(d_v));
-  CUDA_CHECK(cudaFree(d_saved_S));
+  if (d_saved_S)
+    CUDA_CHECK(cudaFree(d_saved_S));
   return has_neg;
 }
 
-static inline int
-COMPUTE_NEGATIVE_EIGEN_LANCZOS(cardal_sdp_solver_state_t *state, int blk_idx,
-                               double *out_min_eigval,
-                               double **out_neg_eigenvectors,
-                               double **out_neg_eigenvalues) {
+static inline int COMPUTE_NEGATIVE_EIGEN_LANCZOS(
+    cardal_sdp_solver_state_t *state, int blk_idx, double *out_min_eigval,
+    double **out_neg_eigenvectors, double **out_neg_eigenvalues) {
   block_low_rank_state_t *blk = state->block_low_rank_state[blk_idx];
   int dim = blk->dim;
   int k = (dim < LANCZOS_K) ? dim : LANCZOS_K;
@@ -859,11 +878,14 @@ COMPUTE_NEGATIVE_EIGEN_LANCZOS(cardal_sdp_solver_state_t *state, int blk_idx,
   size_t bufferSize = 0;
   void *dBuffer = NULL;
   double spmv_alpha = 1.0, spmv_beta = 0.0;
-  CUSPARSE_CHECK(cusparseSpMV_bufferSize(
-      state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_alpha,
-      blk->matSpS, vec_q, &spmv_beta, vec_v, CUDA_R_64F,
-      CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
-  CUDA_CHECK(cudaMalloc(&dBuffer, bufferSize));
+  if (blk->matSpS != NULL) {
+    CUSPARSE_CHECK(cusparseSpMV_bufferSize(
+        state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &spmv_alpha,
+        blk->matSpS, vec_q, &spmv_beta, vec_v, CUDA_R_64F,
+        CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
+    if (bufferSize > 0)
+      CUDA_CHECK(cudaMalloc(&dBuffer, bufferSize));
+  }
 
   for (int j = 0; j < k; j++) {
     double *q_j = d_Q + j * dim;
@@ -998,7 +1020,8 @@ COMPUTE_NEGATIVE_EIGEN_LANCZOS(cardal_sdp_solver_state_t *state, int blk_idx,
   free(Z);
   free(alpha);
   free(beta);
-  CUDA_CHECK(cudaFree(dBuffer));
+  if (dBuffer)
+    CUDA_CHECK(cudaFree(dBuffer));
   CUDA_CHECK(cudaFree(d_Q));
   CUDA_CHECK(cudaFree(d_v));
   if (d_qscratch != NULL)
@@ -1028,9 +1051,11 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
 
   CUDA_CHECK(cudaStreamSynchronize(0));
 
-  // Per-batch dispatch. CUSTOM batches do batched memcpy+add_Ay+SpMM on stream 0
+  // Per-batch dispatch. CUSTOM batches do batched memcpy+add_Ay+SpMM on stream
+  // 0
   for (int bi = 0; bi < state->n_batches; bi++) {
-    const block_low_rank_state_t *batch = state->block_low_rank_state[state->batch_leaders[bi]];
+    const block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
     if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
       launch_batched_copy_objval_to_spS(batch, 0);
       launch_batched_add_Ay_to_spS(batch, state->dual_product, 0);
@@ -1041,8 +1066,12 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
     block_low_rank_state_t *blk =
         state->block_low_rank_state[state->batch_leaders[bi]];
     int nnz_Union =
-        blk->objective_union_constraint_sparse_pattern->num_nonzeros;
-    int nnz_A = blk->constraint_sparse_pattern->num_nonzeros;
+        blk->objective_union_constraint_sparse_pattern
+            ? blk->objective_union_constraint_sparse_pattern->num_nonzeros
+            : 0;
+    int nnz_A = blk->constraint_sparse_pattern
+                    ? blk->constraint_sparse_pattern->num_nonzeros
+                    : 0;
     CUSPARSE_CHECK(cusparseSetStream(state->sparse_handle, blk->stream));
     if (nnz_Union > 0) {
       CUDA_CHECK(
@@ -1056,13 +1085,11 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
             state->dual_product, blk->compat_mapping,
             blk->constraint_to_union_mapping, nnz_A);
       }
-      CUSPARSE_CHECK(cusparseSpMM(state->sparse_handle,
-                                  CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                  CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha_spmm,
-                                  blk->matSpS, blk->matR, &beta_spmm,
-                                  blk->matGrad, CUDA_R_64F,
-                                  CUSPARSE_SPMM_ALG_DEFAULT,
-                                  blk->spmm_buffer_S));
+      CUSPARSE_CHECK(cusparseSpMM(
+          state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha_spmm, blk->matSpS, blk->matR,
+          &beta_spmm, blk->matGrad, CUDA_R_64F, CUSPARSE_SPMM_ALG_DEFAULT,
+          blk->spmm_buffer_S));
     } else {
       CUDA_CHECK(cudaMemsetAsync(blk->gradient, 0,
                                  blk->dim * blk->rank * sizeof(double),
@@ -1074,6 +1101,22 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
   for (int i = 0; i < state->cone_stream_pool_size; i++)
     CUDA_CHECK(cudaStreamSynchronize(state->cone_stream_pool[i]));
 
+  CUBLAS_CHECK(cublasSetStream(state->blas_handle, 0));
+  for (int bi = 0; bi < state->n_batches; bi++) {
+    block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
+    if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
+      batched_low_rank_add_operator_times_matrix(
+          batch, state->q1, 1, state->low_rank_solution,
+          batch->bdata->d_R_offsets, 2.0, state->low_rank_gradient,
+          batch->bdata->d_G_offsets, 0);
+    } else {
+      low_rank_add_operator_times_matrix(state, batch, state->q1, 1,
+                                         batch->solution, batch->rank, 2.0,
+                                         batch->gradient);
+    }
+  }
+
   if (state->lp_dim > 0) {
     int blocks = (state->lp_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     compute_lp_gradient_kernel<<<blocks, THREADS_PER_BLOCK>>>(
@@ -1083,8 +1126,7 @@ static inline void COMPUTE_GRADIENT(cardal_sdp_solver_state_t *state) {
         state->low_rank_solution + state->lp_solution_offset, state->lp_dim);
   }
   if (state->free_dim > 0) {
-    int blocks =
-        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    int blocks = (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     compute_free_gradient_kernel<<<blocks, THREADS_PER_BLOCK>>>(
         state->low_rank_gradient + state->free_solution_offset,
         state->free_objective_vector,
@@ -1105,7 +1147,8 @@ static void COMPUTE_PRIMAL_RESIDUAL(cardal_sdp_solver_state_t *state) {
                         state->n_active_vars * sizeof(double)));
 
   for (int bi = 0; bi < state->n_batches; bi++) {
-    const block_low_rank_state_t *batch = state->block_low_rank_state[state->batch_leaders[bi]];
+    const block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
     if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
       launch_batched_sddmm_self_scatter(state->low_rank_solution, batch,
                                         state->primal_solution, 0);
@@ -1125,8 +1168,7 @@ static void COMPUTE_PRIMAL_RESIDUAL(cardal_sdp_solver_state_t *state) {
         state->low_rank_solution + state->lp_solution_offset, state->lp_dim);
   }
   if (state->free_dim > 0) {
-    int blocks =
-        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    int blocks = (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     compute_free_primal_kernel<<<blocks, THREADS_PER_BLOCK>>>(
         state->primal_solution + state->free_start_active_idx,
         state->low_rank_solution + state->free_solution_offset,
@@ -1140,7 +1182,20 @@ static void COMPUTE_PRIMAL_RESIDUAL(cardal_sdp_solver_state_t *state) {
       state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha_spmv,
       state->matA, state->vec_primal_sol, &beta_spmv, state->vec_primal_prod,
       CUDA_R_64F, CUSPARSE_SPMV_CSR_ALG2, state->primal_spmv_buffer));
-  
+
+  for (int bi = 0; bi < state->n_batches; bi++) {
+    block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
+    if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
+      batched_low_rank_eval_self(batch, state->low_rank_solution,
+                                 batch->bdata->d_R_offsets,
+                                 state->primal_product, NULL, 0);
+    } else {
+      low_rank_eval_self(state, batch, batch->solution, batch->rank,
+                         state->primal_product, NULL);
+    }
+  }
+
 #ifdef IS_DISTRIBUTED
   if (state->grid_context->dims[1] > 1) {
     NCCL_CHECK(ncclAllReduce(state->primal_product, state->primal_product,
@@ -1219,9 +1274,8 @@ static inline int CHECK_DUAL_INFEASIBILITY(cardal_sdp_solver_state_t *state) {
   double cone_violation =
       (global_min_eigval < 0.0) ? fabs(global_min_eigval) : 0.0;
   state->absolute_dual_residual = fmax(cone_violation, free_stationarity);
-  state->relative_dual_residual =
-      state->absolute_dual_residual /
-      (1.0 + state->unscaled_objective_vector_norm);
+  state->relative_dual_residual = state->absolute_dual_residual /
+                                  (1.0 + state->unscaled_objective_vector_norm);
 
   free(rank_incs);
   return total_neg_count;
@@ -1236,7 +1290,8 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
 
   int any_custom = 0;
   for (int bi = 0; bi < state->n_batches; bi++) {
-    const block_low_rank_state_t *batch = state->block_low_rank_state[state->batch_leaders[bi]];
+    const block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
     if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
       launch_batched_sddmm_self_to_spS(state->low_rank_solution, batch, 0);
       launch_batched_segmented_dot_p2(batch, batch->bdata->d_blk_idx,
@@ -1247,15 +1302,15 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
     block_low_rank_state_t *blk =
         state->block_low_rank_state[state->batch_leaders[bi]];
     int nnz_Union =
-        blk->objective_union_constraint_sparse_pattern->num_nonzeros;
+        blk->objective_union_constraint_sparse_pattern
+            ? blk->objective_union_constraint_sparse_pattern->num_nonzeros
+            : 0;
     if (nnz_Union > 0) {
-      CUSPARSE_CHECK(cusparseSDDMM(state->sparse_handle,
-                                   CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                   CUSPARSE_OPERATION_TRANSPOSE, &alpha_sddmm,
-                                   blk->matR, blk->matR, &beta_sddmm,
-                                   blk->matSpS, CUDA_R_64F,
-                                   CUSPARSE_SDDMM_ALG_DEFAULT,
-                                   blk->sddmm_buffer_C));
+      CUSPARSE_CHECK(
+          cusparseSDDMM(state->sparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        CUSPARSE_OPERATION_TRANSPOSE, &alpha_sddmm, blk->matR,
+                        blk->matR, &beta_sddmm, blk->matSpS, CUDA_R_64F,
+                        CUSPARSE_SDDMM_ALG_DEFAULT, blk->sddmm_buffer_C));
       double block_p_obj = 0.0;
       CUBLAS_CHECK(
           cublasDdot(state->blas_handle, nnz_Union,
@@ -1269,13 +1324,35 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
                           state->n_blks * sizeof(double),
                           cudaMemcpyDeviceToHost));
     for (int bi = 0; bi < state->n_batches; bi++) {
-      const block_low_rank_state_t *batch = state->block_low_rank_state[state->batch_leaders[bi]];
+      const block_low_rank_state_t *batch =
+          state->block_low_rank_state[state->batch_leaders[bi]];
       if (batch->kind != CONE_BATCH_KIND_CUSTOM)
         continue;
       for (int c = 0; c < batch->n_cones; c++)
         p_obj += state->h_p2_per_cone[batch->bdata->blk_idx_h[c]];
     }
   }
+
+  double *d_lr_objective = NULL;
+  CUDA_CHECK(cudaMalloc(&d_lr_objective, sizeof(double)));
+  CUDA_CHECK(cudaMemset(d_lr_objective, 0, sizeof(double)));
+  for (int bi = 0; bi < state->n_batches; bi++) {
+    block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
+    if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
+      batched_low_rank_eval_self(batch, state->low_rank_solution,
+                                 batch->bdata->d_R_offsets, NULL,
+                                 d_lr_objective, 0);
+    } else {
+      low_rank_eval_self(state, batch, batch->solution, batch->rank, NULL,
+                         d_lr_objective);
+    }
+  }
+  double lr_objective = 0.0;
+  CUDA_CHECK(cudaMemcpy(&lr_objective, d_lr_objective, sizeof(double),
+                        cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaFree(d_lr_objective));
+  p_obj += lr_objective;
 
   if (state->lp_dim > 0) {
     double lp_p_obj = 0.0;
@@ -1288,8 +1365,7 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
     double free_p_obj = 0.0;
     CUBLAS_CHECK(cublasDdot(
         state->blas_handle, state->free_dim, state->free_objective_vector, 1,
-        state->primal_solution + state->free_start_active_idx, 1,
-        &free_p_obj));
+        state->primal_solution + state->free_start_active_idx, 1, &free_p_obj));
     p_obj += free_p_obj;
   }
 
@@ -1325,7 +1401,8 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
   }
 
   {
-    double denom = state->objective_vector_rescaling * state->right_hand_side_rescaling;
+    double denom =
+        state->objective_vector_rescaling * state->right_hand_side_rescaling;
     if (denom > 0.0 && denom != 1.0) {
       p_obj /= denom;
       global_d_obj /= denom;
@@ -1340,7 +1417,8 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
 #else
   d_obj = -d_obj;
   {
-    double denom = state->objective_vector_rescaling * state->right_hand_side_rescaling;
+    double denom =
+        state->objective_vector_rescaling * state->right_hand_side_rescaling;
     if (denom > 0.0 && denom != 1.0) {
       p_obj /= denom;
       d_obj /= denom;
@@ -1358,10 +1436,11 @@ static inline void COMPUTE_OBJECTIVE_GAP(cardal_sdp_solver_state_t *state) {
 #define ALORA_TRUST_C 2.0
 #endif
 
-static inline void
-RUN_PER_CONE_LANCZOS(cardal_sdp_solver_state_t *state, int *rank_incs,
-                     double **neg_eigvecs, double **neg_eigvals,
-                     double *out_global_min, int *out_total_neg) {
+static inline void RUN_PER_CONE_LANCZOS(cardal_sdp_solver_state_t *state,
+                                        int *rank_incs, double **neg_eigvecs,
+                                        double **neg_eigvals,
+                                        double *out_global_min,
+                                        int *out_total_neg) {
   double global_min = 1e9;
   int total_neg = 0;
   for (int b = 0; b < state->n_blks; b++) {
@@ -1370,7 +1449,8 @@ RUN_PER_CONE_LANCZOS(cardal_sdp_solver_state_t *state, int *rank_incs,
     double *blk_vals = NULL;
     int neg_count = COMPUTE_NEGATIVE_EIGEN_LANCZOS(state, b, &blk_min,
                                                    &blk_vecs, &blk_vals);
-    if (blk_min < global_min) global_min = blk_min;
+    if (blk_min < global_min)
+      global_min = blk_min;
     rank_incs[b] = neg_count;
     total_neg += neg_count;
     neg_eigvecs[b] = blk_vecs;
@@ -1388,9 +1468,9 @@ RUN_PER_CONE_LANCZOS(cardal_sdp_solver_state_t *state, int *rank_incs,
   *out_total_neg = total_neg;
 }
 
-static inline void
-FREE_LANCZOS_BUFFERS(cardal_sdp_solver_state_t *state,
-                     double **neg_eigvecs, double **neg_eigvals) {
+static inline void FREE_LANCZOS_BUFFERS(cardal_sdp_solver_state_t *state,
+                                        double **neg_eigvecs,
+                                        double **neg_eigvals) {
   (void)state;
   for (int b = 0; b < state->n_blks; b++) {
     if (neg_eigvecs[b] != NULL) {
@@ -1443,9 +1523,8 @@ CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(cardal_sdp_solver_state_t *state) {
   double cone_violation =
       (global_min_eigval < 0.0) ? fabs(global_min_eigval) : 0.0;
   state->absolute_dual_residual = fmax(cone_violation, free_stationarity);
-  state->relative_dual_residual =
-      state->absolute_dual_residual /
-      (1.0 + state->unscaled_objective_vector_norm);
+  state->relative_dual_residual = state->absolute_dual_residual /
+                                  (1.0 + state->unscaled_objective_vector_norm);
 
   int total_added = 0;
   if (total_neg_count > 0) {
@@ -1454,8 +1533,8 @@ CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(cardal_sdp_solver_state_t *state) {
              total_neg_count);
     rank_lift_correction_t correction;
     initialize_rank_lift_correction(state, &correction);
-    total_added = solve_joint_rank_lift(
-        state, direction_counts, neg_eigvecs, neg_eigvals, &correction);
+    total_added = solve_joint_rank_lift(state, direction_counts, neg_eigvecs,
+                                        neg_eigvals, &correction);
     if (total_added > 0)
       augment_system_rank(state, correction.rank_incs, correction.d_columns);
     free_rank_lift_correction(state, &correction);
@@ -1468,13 +1547,15 @@ CHECK_DUAL_INFEASIBILITY_AND_AUGMENT(cardal_sdp_solver_state_t *state) {
   return total_added;
 }
 
-static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
-    cardal_sdp_solver_state_t *state, double tau_max);
+static inline double
+COMPUTE_EXACT_STEP_SIZE_TAUMAX(cardal_sdp_solver_state_t *state,
+                               double tau_max);
 static inline double COMPUTE_EXACT_STEP_SIZE(cardal_sdp_solver_state_t *state) {
   return COMPUTE_EXACT_STEP_SIZE_TAUMAX(state, 1.0);
 }
-static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
-    cardal_sdp_solver_state_t *state, double tau_max) {
+static inline double
+COMPUTE_EXACT_STEP_SIZE_TAUMAX(cardal_sdp_solver_state_t *state,
+                               double tau_max) {
   CUBLAS_CHECK(
       cublasSetPointerMode(state->blas_handle, CUBLAS_POINTER_MODE_DEVICE));
   CUDA_CHECK(cudaMemset(state->primal_direct_solution_cross, 0,
@@ -1485,15 +1566,15 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
   CUDA_CHECK(cudaMemset(state->q2, 0, state->num_constraints * sizeof(double)));
 
   for (int bi = 0; bi < state->n_batches; bi++) {
-    const block_low_rank_state_t *batch = state->block_low_rank_state[state->batch_leaders[bi]];
+    const block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
     if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
       launch_batched_sddmm_cross_scatter(state->low_rank_direction,
                                          state->low_rank_direction, batch,
                                          state->primal_direct_double, 0);
-      launch_batched_sddmm_cross_scatter(state->low_rank_solution,
-                                         state->low_rank_direction, batch,
-                                         state->primal_direct_solution_cross,
-                                         0);
+      launch_batched_sddmm_cross_scatter(
+          state->low_rank_solution, state->low_rank_direction, batch,
+          state->primal_direct_solution_cross, 0);
       launch_batched_sddmm_self_to_spS(state->low_rank_direction, batch, 0);
       launch_batched_segmented_dot_p2(batch, batch->bdata->d_blk_idx,
                                       state->d_p2_per_cone, 0);
@@ -1510,7 +1591,8 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
     sum_to_scalar_kernel<<<1, 256>>>(state->d_step_scalars + 6,
                                      state->d_p2_per_cone, state->n_blks);
   } else {
-    CUDA_CHECK(cudaMemsetAsync(state->d_step_scalars + 6, 0, sizeof(double), 0));
+    CUDA_CHECK(
+        cudaMemsetAsync(state->d_step_scalars + 6, 0, sizeof(double), 0));
   }
 
   if (state->lp_dim > 0) {
@@ -1526,11 +1608,11 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
         state->primal_direct_double + state->lp_start_active_idx, 1,
         state->d_step_scalars + 7));
   } else {
-    CUDA_CHECK(cudaMemsetAsync(state->d_step_scalars + 7, 0, sizeof(double), 0));
+    CUDA_CHECK(
+        cudaMemsetAsync(state->d_step_scalars + 7, 0, sizeof(double), 0));
   }
   if (state->free_dim > 0) {
-    int blocks =
-        (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    int blocks = (state->free_dim + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     compute_free_line_search_kernel<<<blocks, THREADS_PER_BLOCK>>>(
         state->low_rank_direction + state->free_solution_offset,
         state->primal_direct_solution_cross + state->free_start_active_idx,
@@ -1554,22 +1636,45 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
       state->matA, state->vec_primal_sol, &beta_spmv, state->vec_primal_prod,
       CUDA_R_64F, CUSPARSE_SPMV_CSR_ALG2, state->primal_spmv_buffer));
 
+  for (int bi = 0; bi < state->n_batches; bi++) {
+    block_low_rank_state_t *batch =
+        state->block_low_rank_state[state->batch_leaders[bi]];
+    if (batch->kind == CONE_BATCH_KIND_CUSTOM) {
+      batched_low_rank_eval_self(batch, state->low_rank_direction,
+                                 batch->bdata->d_D_offsets, state->q2,
+                                 state->d_step_scalars + 6, 0);
+      batched_low_rank_eval_cross(
+          batch, state->low_rank_solution, batch->bdata->d_R_offsets,
+          state->low_rank_direction, batch->bdata->d_D_offsets, state->q1, NULL,
+          0);
+    } else {
+      low_rank_eval_self(state, batch, batch->direction, batch->rank, state->q2,
+                         state->d_step_scalars + 6);
+      low_rank_eval_cross(state, batch, batch->solution, batch->direction,
+                          batch->rank, state->q1, NULL);
+    }
+  }
+
 #ifdef IS_DISTRIBUTED
   if (state->grid_context->dims[1] > 1) {
-      NCCL_CHECK(ncclGroupStart());
-      NCCL_CHECK(ncclAllReduce(state->q2, state->q2, state->num_constraints,
-                               ncclDouble, ncclSum, state->grid_context->nccl_rank, 0));
-      NCCL_CHECK(ncclAllReduce(state->q1, state->q1, state->num_constraints,
-                               ncclDouble, ncclSum, state->grid_context->nccl_rank, 0));
-      NCCL_CHECK(ncclGroupEnd());
+    NCCL_CHECK(ncclGroupStart());
+    NCCL_CHECK(ncclAllReduce(state->q2, state->q2, state->num_constraints,
+                             ncclDouble, ncclSum,
+                             state->grid_context->nccl_rank, 0));
+    NCCL_CHECK(ncclAllReduce(state->q1, state->q1, state->num_constraints,
+                             ncclDouble, ncclSum,
+                             state->grid_context->nccl_rank, 0));
+    NCCL_CHECK(ncclGroupEnd());
   }
   if (state->grid_context->dims[2] > 1) {
-      NCCL_CHECK(ncclGroupStart());
-      NCCL_CHECK(ncclAllReduce(state->q2, state->q2, state->num_constraints,
-                               ncclDouble, ncclSum, state->grid_context->nccl_cone, 0));
-      NCCL_CHECK(ncclAllReduce(state->q1, state->q1, state->num_constraints,
-                               ncclDouble, ncclSum, state->grid_context->nccl_cone, 0));
-      NCCL_CHECK(ncclGroupEnd());
+    NCCL_CHECK(ncclGroupStart());
+    NCCL_CHECK(ncclAllReduce(state->q2, state->q2, state->num_constraints,
+                             ncclDouble, ncclSum,
+                             state->grid_context->nccl_cone, 0));
+    NCCL_CHECK(ncclAllReduce(state->q1, state->q1, state->num_constraints,
+                             ncclDouble, ncclSum,
+                             state->grid_context->nccl_cone, 0));
+    NCCL_CHECK(ncclGroupEnd());
   }
 #endif
 
@@ -1624,10 +1729,9 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
   }
 #endif
 
-  solve_line_search_tau_kernel<<<1, 1>>>(state->d_step_scalars,
-                                         state->penalty_coef,
-                                         /*tau_slot=*/8, /*tau_sq_slot=*/9,
-                                         tau_max);
+  solve_line_search_tau_kernel<<<1, 1>>>(
+      state->d_step_scalars, state->penalty_coef,
+      /*tau_slot=*/8, /*tau_sq_slot=*/9, tau_max);
 
   CUBLAS_CHECK(
       cublasSetPointerMode(state->blas_handle, CUBLAS_POINTER_MODE_HOST));
@@ -1648,7 +1752,8 @@ static inline double COMPUTE_EXACT_STEP_SIZE_TAUMAX(
 static inline int
 DETECT_NEGATIVE_CURVATURE_AND_ESCAPE(cardal_sdp_solver_state_t *state,
                                      double threshold_factor) {
-  if (state->n_blks <= 0) return 0;
+  if (state->n_blks <= 0)
+    return 0;
   double scale_factor = 1.0 + state->objective_vector_linf_norm;
   double curvature_threshold = threshold_factor * scale_factor;
 
@@ -1674,7 +1779,8 @@ DETECT_NEGATIVE_CURVATURE_AND_ESCAPE(cardal_sdp_solver_state_t *state,
     FIND_AL_NEGATIVE_CURVATURE(state, b, &lambda_min, &d_V_neg);
 
     if (d_V_neg == NULL || lambda_min >= -curvature_threshold) {
-      if (d_V_neg) CUDA_CHECK(cudaFree(d_V_neg));
+      if (d_V_neg)
+        CUDA_CHECK(cudaFree(d_V_neg));
       blk_offset += blk_len;
       continue;
     }
@@ -1688,14 +1794,12 @@ DETECT_NEGATIVE_CURVATURE_AND_ESCAPE(cardal_sdp_solver_state_t *state,
     double dot = rank_axis_sum_scalar(state, dot_local);
     if (dot > 0.0) {
       double m1 = -1.0;
-      CUBLAS_CHECK(
-          cublasDscal(state->blas_handle, blk_len, &m1, d_V_neg, 1));
+      CUBLAS_CHECK(cublasDscal(state->blas_handle, blk_len, &m1, d_V_neg, 1));
     }
 
     // Place V_neg into block b's slot of low_rank_direction.
     CUDA_CHECK(cudaMemcpy(state->low_rank_direction + blk_offset, d_V_neg,
-                          blk_len * sizeof(double),
-                          cudaMemcpyDeviceToDevice));
+                          blk_len * sizeof(double), cudaMemcpyDeviceToDevice));
 
     double tau = COMPUTE_EXACT_STEP_SIZE_TAUMAX(state, 1e6);
 

@@ -19,6 +19,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .enums import TerminationReason
 from .model import Model
+from .low_rank import LowRank, SparseLowRank
 from .result import Result
 
 try:
@@ -29,6 +30,8 @@ except PackageNotFoundError:
 __all__ = [
     "__version__",
     "Model",
+    "LowRank",
+    "SparseLowRank",
     "Result",
     "TerminationReason",
     # Convenience re-exports of the most common status codes at package top:

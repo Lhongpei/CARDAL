@@ -65,6 +65,24 @@ diagonal are ignored.
     symmetric matrix. Canonicalize each matrix to one triangle before passing
     it to CARDAL.
 
+## Structured objective and constraints
+
+An objective block or constraint block may combine sparse and signed low-rank
+data:
+
+\[
+M=S+U\mathrm{diag}(d)U^\top.
+\]
+
+The weights \(d\) may be positive, negative, or mixed, so this representation
+supports general symmetric data matrices rather than only PSD data. CARDAL
+applies the low-rank term directly in residual, gradient, line-search,
+Hessian-vector, and dual-slack operations. It does not expand the term into a
+dense matrix.
+
+This is a storage and compute format for \(C_c\) and \(A_{i,c}\). It does not
+impose an additional rank constraint on the primal variable \(X_c\).
+
 ## Objective sign
 
 The in-memory Python and C construction APIs solve the objective exactly as
@@ -85,8 +103,8 @@ The same mathematical problem can enter CARDAL through several routes:
 | Route | Best suited for |
 |:--|:--|
 | `Model.read_file` / `cardal_read_sdpa` / `cardal -f` | Existing SDPA, MATLAB, or PDSDP files |
-| `Model.set_problem` | Dense NumPy or SciPy block matrices |
-| `Model.set_problem_coo` | Large sparse problems already stored as triplets |
+| `Model.set_problem` | Dense, SciPy sparse, low-rank, or hybrid block matrices |
+| `Model.set_problem_coo` | Large sparse and low-rank data already stored as packed arrays |
 | `cardal_build_problem` | Native applications using C-owned arrays |
 
 The [File Formats](file-formats.md) page documents file schemas. The

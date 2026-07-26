@@ -64,6 +64,40 @@ static sparse_csr_matrix_t *deepcopy_csr(const sparse_csr_matrix_t *mat) {
   return copy;
 }
 
+static symmetric_low_rank_data_t *
+deepcopy_low_rank(const symmetric_low_rank_data_t *src) {
+  if (!src || src->num_columns <= 0)
+    return NULL;
+  symmetric_low_rank_data_t *dst = (symmetric_low_rank_data_t *)safe_calloc(
+      1, sizeof(symmetric_low_rank_data_t));
+  int n = src->num_columns;
+  long long nf = src->factor_ptr[n];
+  dst->num_columns = n;
+  dst->constraint_ind = (int *)safe_malloc((size_t)n * sizeof(int));
+  dst->cone_ind = (int *)safe_malloc((size_t)n * sizeof(int));
+  dst->factor_ptr =
+      (long long *)safe_malloc((size_t)(n + 1) * sizeof(long long));
+  dst->factor_values = (double *)safe_malloc((size_t)nf * sizeof(double));
+  dst->weights = (double *)safe_malloc((size_t)n * sizeof(double));
+  memcpy(dst->constraint_ind, src->constraint_ind, (size_t)n * sizeof(int));
+  memcpy(dst->cone_ind, src->cone_ind, (size_t)n * sizeof(int));
+  memcpy(dst->factor_ptr, src->factor_ptr, (size_t)(n + 1) * sizeof(long long));
+  memcpy(dst->factor_values, src->factor_values, (size_t)nf * sizeof(double));
+  memcpy(dst->weights, src->weights, (size_t)n * sizeof(double));
+  return dst;
+}
+
+static void free_low_rank(symmetric_low_rank_data_t *data) {
+  if (!data)
+    return;
+  free(data->constraint_ind);
+  free(data->cone_ind);
+  free(data->factor_ptr);
+  free(data->factor_values);
+  free(data->weights);
+  free(data);
+}
+
 static void free_csr(sparse_csr_matrix_t *mat) {
   if (!mat)
     return;
@@ -90,9 +124,9 @@ deepcopy_sdp_problem(const compressed_sdp_problem_t *prob) {
 
   out->blk_dims = (int *)safe_malloc(prob->n_blks * sizeof(int));
   memcpy(out->blk_dims, prob->blk_dims, prob->n_blks * sizeof(int));
-  out->blk_ptr = (long long *)safe_malloc((prob->n_blks + 1) * sizeof(long long));
-  memcpy(out->blk_ptr, prob->blk_ptr,
-         (prob->n_blks + 1) * sizeof(long long));
+  out->blk_ptr =
+      (long long *)safe_malloc((prob->n_blks + 1) * sizeof(long long));
+  memcpy(out->blk_ptr, prob->blk_ptr, (prob->n_blks + 1) * sizeof(long long));
 
   if (prob->n_active_vars > 0) {
     out->col_mapping =
@@ -103,6 +137,7 @@ deepcopy_sdp_problem(const compressed_sdp_problem_t *prob) {
 
   out->constraint_matrix = deepcopy_csr(prob->constraint_matrix);
   out->constraint_matrix_t = deepcopy_csr(prob->constraint_matrix_t);
+  out->low_rank_data = deepcopy_low_rank(prob->low_rank_data);
 
   if (prob->objective_vector_sparse) {
     out->objective_vector_sparse =
@@ -153,6 +188,7 @@ static void free_sdp_problem_clone(compressed_sdp_problem_t *prob) {
   free(prob->free_objective_vector);
   free_csr(prob->constraint_matrix);
   free_csr(prob->constraint_matrix_t);
+  free_low_rank(prob->low_rank_data);
   if (prob->objective_vector_sparse) {
     free(prob->objective_vector_sparse->pos);
     free(prob->objective_vector_sparse->val);
@@ -220,18 +256,46 @@ static void ruiz_rescaling_sdp(compressed_sdp_problem_t *prob, int num_iters,
       }
     }
 
+    if (prob->low_rank_data) {
+      symmetric_low_rank_data_t *lr = prob->low_rank_data;
+      for (int j = 0; j < lr->num_columns; j++) {
+        int constr = lr->constraint_ind[j];
+        if (constr < 0)
+          continue;
+        int cone = lr->cone_ind[j];
+        int dim = prob->blk_dims[cone];
+        const double *u = lr->factor_values + lr->factor_ptr[j];
+        double umax = 0.0;
+        for (int r = 0; r < dim; r++)
+          if (fabs(u[r]) > umax)
+            umax = fabs(u[r]);
+        double wabs = fabs(lr->weights[j]);
+        double bound = wabs * umax * umax;
+        if (bound > row_max[constr])
+          row_max[constr] = bound;
+        for (int r = 0; r < dim; r++) {
+          double row_bound = wabs * fabs(u[r]) * umax;
+          int slot = r_blk_ptr[cone] + r;
+          if (row_bound > R_max[slot])
+            R_max[slot] = row_bound;
+        }
+      }
+    }
+
     for (int i = 0; i < m; i++)
-      row_max[i] =
-          (row_max[i] < SCALING_EPSILON) ? 1.0 : sqrt(row_max[i]);
+      row_max[i] = (row_max[i] < SCALING_EPSILON) ? 1.0 : sqrt(row_max[i]);
     if (psd_scale_mode == PSD_SCALE_MODE_PER_CONE) {
       // Per-cone uniform: collapse R_max within each cone to a single value.
       for (int k = 0; k < prob->n_blks; k++) {
         int start = r_blk_ptr[k];
         int end = start + prob->blk_dims[k];
         double mx = 0.0;
-        for (int i = start; i < end; i++) if (R_max[i] > mx) mx = R_max[i];
+        for (int i = start; i < end; i++)
+          if (R_max[i] > mx)
+            mx = R_max[i];
         double s = (mx < SCALING_EPSILON) ? 1.0 : sqrt(mx);
-        for (int i = start; i < end; i++) R_max[i] = s;
+        for (int i = start; i < end; i++)
+          R_max[i] = s;
       }
     } else {
       for (int i = 0; i < total_r_dim; i++)
@@ -240,8 +304,7 @@ static void ruiz_rescaling_sdp(compressed_sdp_problem_t *prob, int num_iters,
     for (int i = 0; i < lp_dim; i++)
       lp_max[i] = (lp_max[i] < SCALING_EPSILON) ? 1.0 : sqrt(lp_max[i]);
     for (int i = 0; i < free_dim; i++)
-      free_max[i] =
-          (free_max[i] < SCALING_EPSILON) ? 1.0 : sqrt(free_max[i]);
+      free_max[i] = (free_max[i] < SCALING_EPSILON) ? 1.0 : sqrt(free_max[i]);
 
     for (int i = 0; i < m; i++)
       prob->right_hand_side[i] /= row_max[i];
@@ -266,12 +329,26 @@ static void ruiz_rescaling_sdp(compressed_sdp_problem_t *prob, int num_iters,
       }
     }
 
+    if (prob->low_rank_data) {
+      symmetric_low_rank_data_t *lr = prob->low_rank_data;
+      for (int j = 0; j < lr->num_columns; j++) {
+        int cone = lr->cone_ind[j];
+        int dim = prob->blk_dims[cone];
+        double *u = lr->factor_values + lr->factor_ptr[j];
+        for (int r = 0; r < dim; r++)
+          u[r] /= R_max[r_blk_ptr[cone] + r];
+        int constr = lr->constraint_ind[j];
+        if (constr >= 0)
+          lr->weights[j] /= row_max[constr];
+      }
+    }
+
     if (prob->objective_vector_sparse) {
       for (int p = 0; p < prob->objective_vector_sparse->len; p++) {
         long long g_idx = prob->objective_vector_sparse->pos[p];
         int k, r, c;
-        decode_g_idx(g_idx, prob->n_blks, prob->blk_ptr, prob->blk_dims, &k,
-                     &r, &c);
+        decode_g_idx(g_idx, prob->n_blks, prob->blk_ptr, prob->blk_dims, &k, &r,
+                     &c);
         prob->objective_vector_sparse->val[p] /=
             (R_max[r_blk_ptr[k] + r] * R_max[r_blk_ptr[k] + c]);
       }
@@ -312,25 +389,21 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
   int *r_blk_ptr = build_r_blk_ptr(prob->n_blks, prob->blk_dims, &total_r_dim);
 
   double *row_sum = (double *)safe_calloc((size_t)m, sizeof(double));
-  double *R_sum = total_r_dim > 0
-                      ? (double *)safe_calloc((size_t)total_r_dim,
-                                              sizeof(double))
-                      : NULL;
-  double *lp_sum = lp_dim > 0
-                       ? (double *)safe_calloc((size_t)lp_dim, sizeof(double))
-                       : NULL;
+  double *R_sum = total_r_dim > 0 ? (double *)safe_calloc((size_t)total_r_dim,
+                                                          sizeof(double))
+                                  : NULL;
+  double *lp_sum =
+      lp_dim > 0 ? (double *)safe_calloc((size_t)lp_dim, sizeof(double)) : NULL;
   double *free_sum =
-      free_dim > 0
-          ? (double *)safe_calloc((size_t)free_dim, sizeof(double))
-          : NULL;
+      free_dim > 0 ? (double *)safe_calloc((size_t)free_dim, sizeof(double))
+                   : NULL;
 
-  double *row_max_buf = total_r_dim > 0
-                            ? (double *)safe_calloc((size_t)total_r_dim,
-                                                    sizeof(double))
-                            : NULL;
+  double *row_max_buf =
+      total_r_dim > 0
+          ? (double *)safe_calloc((size_t)total_r_dim, sizeof(double))
+          : NULL;
   int *touched_idx = total_r_dim > 0
-                         ? (int *)safe_malloc((size_t)total_r_dim *
-                                              sizeof(int))
+                         ? (int *)safe_malloc((size_t)total_r_dim * sizeof(int))
                          : NULL;
 
   for (int i = 0; i < m; i++) {
@@ -345,8 +418,8 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
           continue;
         long long g_idx = prob->col_mapping[compact_col];
         int k, r, c;
-        decode_g_idx(g_idx, prob->n_blks, prob->blk_ptr, prob->blk_dims, &k,
-                     &r, &c);
+        decode_g_idx(g_idx, prob->n_blks, prob->blk_ptr, prob->blk_dims, &k, &r,
+                     &c);
         int r_idx = r_blk_ptr[k] + r;
         if (row_max_buf[r_idx] == 0.0)
           touched_idx[touched_count++] = r_idx;
@@ -366,12 +439,34 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
       row_max_buf[r_idx] = 0.0;
     }
   }
+  if (prob->low_rank_data) {
+    symmetric_low_rank_data_t *lr = prob->low_rank_data;
+    for (int j = 0; j < lr->num_columns; j++) {
+      int constr = lr->constraint_ind[j];
+      if (constr < 0)
+        continue;
+      int cone = lr->cone_ind[j];
+      int dim = prob->blk_dims[cone];
+      const double *u = lr->factor_values + lr->factor_ptr[j];
+      double norm_sq = 0.0, umax = 0.0;
+      for (int r = 0; r < dim; r++) {
+        norm_sq += u[r] * u[r];
+        if (fabs(u[r]) > umax)
+          umax = fabs(u[r]);
+      }
+      double wabs = fabs(lr->weights[j]);
+      row_sum[constr] += pow(wabs * norm_sq, alpha);
+      for (int r = 0; r < dim; r++) {
+        double bound = wabs * fabs(u[r]) * umax;
+        R_sum[r_blk_ptr[cone] + r] += pow(bound, 2.0 - alpha);
+      }
+    }
+  }
   free(row_max_buf);
   free(touched_idx);
 
   for (int i = 0; i < m; i++)
-    row_sum[i] =
-        (row_sum[i] < SCALING_EPSILON) ? 1.0 : sqrt(row_sum[i]);
+    row_sum[i] = (row_sum[i] < SCALING_EPSILON) ? 1.0 : sqrt(row_sum[i]);
   if (psd_scale_mode == PSD_SCALE_MODE_PER_CONE) {
     // Per-cone uniform PC: collapse R_sum within each cone to a single value
     // (max across the cone's rows -> shared scalar). Preserves cone PSD.
@@ -379,9 +474,12 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
       int start = r_blk_ptr[k];
       int end = start + prob->blk_dims[k];
       double mx = 0.0;
-      for (int i = start; i < end; i++) if (R_sum[i] > mx) mx = R_sum[i];
+      for (int i = start; i < end; i++)
+        if (R_sum[i] > mx)
+          mx = R_sum[i];
       double s = (mx < SCALING_EPSILON) ? 1.0 : pow(mx, 0.25);
-      for (int i = start; i < end; i++) R_sum[i] = s;
+      for (int i = start; i < end; i++)
+        R_sum[i] = s;
     }
   } else {
     for (int i = 0; i < total_r_dim; i++)
@@ -390,8 +488,7 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
   for (int i = 0; i < lp_dim; i++)
     lp_sum[i] = (lp_sum[i] < SCALING_EPSILON) ? 1.0 : sqrt(lp_sum[i]);
   for (int i = 0; i < free_dim; i++)
-    free_sum[i] =
-        (free_sum[i] < SCALING_EPSILON) ? 1.0 : sqrt(free_sum[i]);
+    free_sum[i] = (free_sum[i] < SCALING_EPSILON) ? 1.0 : sqrt(free_sum[i]);
 
   // Cap CUMULATIVE (Ruiz * PC) diagonal scaling so max <= pc_max_diag.
   // Uniform scalar division preserves relative directions.
@@ -400,38 +497,46 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
     double row_total_max = 0.0;
     for (int i = 0; i < m; i++) {
       double v = info->constraint_rescaling[i] * row_sum[i];
-      if (v > row_total_max) row_total_max = v;
+      if (v > row_total_max)
+        row_total_max = v;
     }
     if (row_total_max > pc_max_diag) {
       double s = pc_max_diag / row_total_max;
-      for (int i = 0; i < m; i++) row_sum[i] *= s;
+      for (int i = 0; i < m; i++)
+        row_sum[i] *= s;
     }
     double R_total_max = 0.0;
     for (int i = 0; i < total_r_dim; i++) {
       double v = info->psd_cone_rescaling[i] * R_sum[i];
-      if (v > R_total_max) R_total_max = v;
+      if (v > R_total_max)
+        R_total_max = v;
     }
     if (R_total_max > pc_max_diag) {
       double s = pc_max_diag / R_total_max;
-      for (int i = 0; i < total_r_dim; i++) R_sum[i] *= s;
+      for (int i = 0; i < total_r_dim; i++)
+        R_sum[i] *= s;
     }
     double lp_total_max = 0.0;
     for (int i = 0; i < lp_dim; i++) {
       double v = info->lp_variable_rescaling[i] * lp_sum[i];
-      if (v > lp_total_max) lp_total_max = v;
+      if (v > lp_total_max)
+        lp_total_max = v;
     }
     if (lp_total_max > pc_max_diag) {
       double s = pc_max_diag / lp_total_max;
-      for (int i = 0; i < lp_dim; i++) lp_sum[i] *= s;
+      for (int i = 0; i < lp_dim; i++)
+        lp_sum[i] *= s;
     }
     double free_total_max = 0.0;
     for (int i = 0; i < free_dim; i++) {
       double v = info->free_variable_rescaling[i] * free_sum[i];
-      if (v > free_total_max) free_total_max = v;
+      if (v > free_total_max)
+        free_total_max = v;
     }
     if (free_total_max > pc_max_diag) {
       double s = pc_max_diag / free_total_max;
-      for (int i = 0; i < free_dim; i++) free_sum[i] *= s;
+      for (int i = 0; i < free_dim; i++)
+        free_sum[i] *= s;
     }
   }
 
@@ -444,8 +549,8 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
       if (compact_col < lp_start_idx) {
         long long g_idx = prob->col_mapping[compact_col];
         int k, r, c;
-        decode_g_idx(g_idx, prob->n_blks, prob->blk_ptr, prob->blk_dims, &k,
-                     &r, &c);
+        decode_g_idx(g_idx, prob->n_blks, prob->blk_ptr, prob->blk_dims, &k, &r,
+                     &c);
         A->val[p] /=
             (row_sum[i] * R_sum[r_blk_ptr[k] + r] * R_sum[r_blk_ptr[k] + c]);
       } else if (compact_col < free_start_idx) {
@@ -455,6 +560,20 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
         int free_idx = compact_col - free_start_idx;
         A->val[p] /= (row_sum[i] * free_sum[free_idx]);
       }
+    }
+  }
+
+  if (prob->low_rank_data) {
+    symmetric_low_rank_data_t *lr = prob->low_rank_data;
+    for (int j = 0; j < lr->num_columns; j++) {
+      int cone = lr->cone_ind[j];
+      int dim = prob->blk_dims[cone];
+      double *u = lr->factor_values + lr->factor_ptr[j];
+      for (int r = 0; r < dim; r++)
+        u[r] /= R_sum[r_blk_ptr[cone] + r];
+      int constr = lr->constraint_ind[j];
+      if (constr >= 0)
+        lr->weights[j] /= row_sum[constr];
     }
   }
 
@@ -490,26 +609,40 @@ static void pock_chambolle_rescaling_sdp(compressed_sdp_problem_t *prob,
 }
 
 static void bound_obj_rescaling_sdp(compressed_sdp_problem_t *prob,
-                                     rescale_info_t *info) {
+                                    rescale_info_t *info) {
   double b_norm_sq = 0.0;
   for (int i = 0; i < prob->num_constraints; ++i) {
     b_norm_sq += prob->right_hand_side[i] * prob->right_hand_side[i];
   }
 
-  double c_norm_sq = 0.0;
+  double psd_objective_bound = 0.0;
   if (prob->objective_vector_sparse) {
     for (int p = 0; p < prob->objective_vector_sparse->len; p++) {
-      c_norm_sq += prob->objective_vector_sparse->val[p] *
-                   prob->objective_vector_sparse->val[p];
+      double value = prob->objective_vector_sparse->val[p];
+      psd_objective_bound += value * value;
+    }
+    psd_objective_bound = sqrt(psd_objective_bound);
+  }
+  if (prob->low_rank_data) {
+    const symmetric_low_rank_data_t *lr = prob->low_rank_data;
+    for (int j = 0; j < lr->num_columns; j++) {
+      if (lr->constraint_ind[j] >= 0)
+        continue;
+      int dim = prob->blk_dims[lr->cone_ind[j]];
+      const double *u = lr->factor_values + lr->factor_ptr[j];
+      double norm_sq = 0.0;
+      for (int r = 0; r < dim; r++)
+        norm_sq += u[r] * u[r];
+      psd_objective_bound += fabs(lr->weights[j]) * norm_sq;
     }
   }
+  double c_norm_sq = psd_objective_bound * psd_objective_bound;
   for (int i = 0; i < prob->lp_dim; ++i) {
-    c_norm_sq +=
-        prob->lp_objective_vector[i] * prob->lp_objective_vector[i];
+    c_norm_sq += prob->lp_objective_vector[i] * prob->lp_objective_vector[i];
   }
   for (int i = 0; i < prob->free_dim; ++i) {
-    c_norm_sq += prob->free_objective_vector[i] *
-                 prob->free_objective_vector[i];
+    c_norm_sq +=
+        prob->free_objective_vector[i] * prob->free_objective_vector[i];
   }
 
   info->right_hand_side_rescaling = 1.0 / (sqrt(b_norm_sq) + 1.0);
@@ -523,14 +656,21 @@ static void bound_obj_rescaling_sdp(compressed_sdp_problem_t *prob,
       prob->objective_vector_sparse->val[p] *= info->objective_vector_rescaling;
     }
   }
+  if (prob->low_rank_data) {
+    symmetric_low_rank_data_t *lr = prob->low_rank_data;
+    for (int j = 0; j < lr->num_columns; j++)
+      if (lr->constraint_ind[j] < 0)
+        lr->weights[j] *= info->objective_vector_rescaling;
+  }
   for (int i = 0; i < prob->lp_dim; ++i)
     prob->lp_objective_vector[i] *= info->objective_vector_rescaling;
   for (int i = 0; i < prob->free_dim; ++i)
     prob->free_objective_vector[i] *= info->objective_vector_rescaling;
 }
 
-rescale_info_t *rescale_problem(const cardal_parameters_t *params,
-                                const compressed_sdp_problem_t *original_problem) {
+rescale_info_t *
+rescale_problem(const cardal_parameters_t *params,
+                const compressed_sdp_problem_t *original_problem) {
   if (original_problem == NULL || params == NULL)
     return NULL;
 
@@ -562,8 +702,20 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
       for (int p = 0; p < n_C; p++)
         nc += fabs(original_problem->objective_vector_sparse->val[p]);
     }
-    if (original_problem->lp_dim > 0 &&
-        original_problem->lp_objective_vector) {
+    if (original_problem->low_rank_data) {
+      const symmetric_low_rank_data_t *lr = original_problem->low_rank_data;
+      for (int j = 0; j < lr->num_columns; j++) {
+        if (lr->constraint_ind[j] >= 0)
+          continue;
+        int dim = original_problem->blk_dims[lr->cone_ind[j]];
+        const double *u = lr->factor_values + lr->factor_ptr[j];
+        double norm_sq = 0.0;
+        for (int r = 0; r < dim; r++)
+          norm_sq += u[r] * u[r];
+        nc += fabs(lr->weights[j]) * norm_sq;
+      }
+    }
+    if (original_problem->lp_dim > 0 && original_problem->lp_objective_vector) {
       for (int i = 0; i < original_problem->lp_dim; i++)
         nc += fabs(original_problem->lp_objective_vector[i]);
     }
@@ -580,18 +732,18 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
                                    original_problem->blk_dims, &total_r_dim);
   free(tmp_r_blk);
 
-  info->constraint_rescaling = (double *)safe_malloc((size_t)m * sizeof(double));
+  info->constraint_rescaling =
+      (double *)safe_malloc((size_t)m * sizeof(double));
   info->psd_cone_rescaling =
       total_r_dim > 0
           ? (double *)safe_malloc((size_t)total_r_dim * sizeof(double))
           : NULL;
   info->lp_variable_rescaling =
       lp_dim > 0 ? (double *)safe_malloc((size_t)lp_dim * sizeof(double))
-                  : NULL;
+                 : NULL;
   info->free_variable_rescaling =
-      free_dim > 0
-          ? (double *)safe_malloc((size_t)free_dim * sizeof(double))
-          : NULL;
+      free_dim > 0 ? (double *)safe_malloc((size_t)free_dim * sizeof(double))
+                   : NULL;
 
   for (int i = 0; i < m; ++i)
     info->constraint_rescaling[i] = 1.0;
@@ -613,8 +765,7 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
   double *ruiz_only_psd = NULL;
   if (params->verbose >= 3) {
     // Snapshot Ruiz-only scaling for debug diagnostics.
-    ruiz_only_constraint =
-        (double *)safe_malloc((size_t)m * sizeof(double));
+    ruiz_only_constraint = (double *)safe_malloc((size_t)m * sizeof(double));
     ruiz_only_psd =
         total_r_dim > 0
             ? (double *)safe_malloc((size_t)total_r_dim * sizeof(double))
@@ -628,20 +779,27 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
   // Optionally compute "PC-before-Ruiz" stats by running PC on a deep copy of
   // the original problem (does not affect the actual scaling pipeline).
   if (params->has_pock_chambolle_alpha && params->verbose >= 3) {
-    rescale_info_t *probe = (rescale_info_t *)safe_calloc(1, sizeof(rescale_info_t));
+    rescale_info_t *probe =
+        (rescale_info_t *)safe_calloc(1, sizeof(rescale_info_t));
     probe->scaled_problem = deepcopy_sdp_problem(original_problem);
-    probe->constraint_rescaling = (double *)safe_calloc((size_t)m, sizeof(double));
-    probe->psd_cone_rescaling = total_r_dim > 0
-        ? (double *)safe_calloc((size_t)total_r_dim, sizeof(double)) : NULL;
-    probe->lp_variable_rescaling = lp_dim > 0
-        ? (double *)safe_calloc((size_t)lp_dim, sizeof(double)) : NULL;
-    probe->free_variable_rescaling =
-        free_dim > 0
-            ? (double *)safe_calloc((size_t)free_dim, sizeof(double))
+    probe->constraint_rescaling =
+        (double *)safe_calloc((size_t)m, sizeof(double));
+    probe->psd_cone_rescaling =
+        total_r_dim > 0
+            ? (double *)safe_calloc((size_t)total_r_dim, sizeof(double))
             : NULL;
-    for (int i = 0; i < m; i++) probe->constraint_rescaling[i] = 1.0;
-    for (int i = 0; i < total_r_dim; i++) probe->psd_cone_rescaling[i] = 1.0;
-    for (int i = 0; i < lp_dim; i++) probe->lp_variable_rescaling[i] = 1.0;
+    probe->lp_variable_rescaling =
+        lp_dim > 0 ? (double *)safe_calloc((size_t)lp_dim, sizeof(double))
+                   : NULL;
+    probe->free_variable_rescaling =
+        free_dim > 0 ? (double *)safe_calloc((size_t)free_dim, sizeof(double))
+                     : NULL;
+    for (int i = 0; i < m; i++)
+      probe->constraint_rescaling[i] = 1.0;
+    for (int i = 0; i < total_r_dim; i++)
+      probe->psd_cone_rescaling[i] = 1.0;
+    for (int i = 0; i < lp_dim; i++)
+      probe->lp_variable_rescaling[i] = 1.0;
     for (int i = 0; i < free_dim; i++)
       probe->free_variable_rescaling[i] = 1.0;
     pock_chambolle_rescaling_sdp(probe->scaled_problem,
@@ -650,17 +808,23 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
     double rmin = 1e300, rmax = 0.0;
     for (int i = 0; i < m; i++) {
       double v = probe->constraint_rescaling[i];
-      if (v < rmin) rmin = v;
-      if (v > rmax) rmax = v;
+      if (v < rmin)
+        rmin = v;
+      if (v > rmax)
+        rmax = v;
     }
     double pmin = 1e300, pmax = 0.0;
     for (int i = 0; i < total_r_dim; i++) {
       double v = probe->psd_cone_rescaling[i];
-      if (v < pmin) pmin = v;
-      if (v > pmax) pmax = v;
+      if (v < pmin)
+        pmin = v;
+      if (v > pmax)
+        pmax = v;
     }
-    printf("  [PC-on-ORIG] constraint_rescaling: min=%.3e max=%.3e\n", rmin, rmax);
-    printf("  [PC-on-ORIG] psd_cone_rescaling  : min=%.3e max=%.3e\n", pmin, pmax);
+    printf("  [PC-on-ORIG] constraint_rescaling: min=%.3e max=%.3e\n", rmin,
+           rmax);
+    printf("  [PC-on-ORIG] psd_cone_rescaling  : min=%.3e max=%.3e\n", pmin,
+           pmax);
     free_rescale_info(probe);
   }
 
@@ -669,17 +833,23 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
     double rmin = 1e300, rmax = 0.0;
     for (int i = 0; i < m; i++) {
       double v = ruiz_only_constraint[i];
-      if (v < rmin) rmin = v;
-      if (v > rmax) rmax = v;
+      if (v < rmin)
+        rmin = v;
+      if (v > rmax)
+        rmax = v;
     }
     double pmin = 1e300, pmax = 0.0;
     for (int i = 0; i < total_r_dim; i++) {
       double v = ruiz_only_psd[i];
-      if (v < pmin) pmin = v;
-      if (v > pmax) pmax = v;
+      if (v < pmin)
+        pmin = v;
+      if (v > pmax)
+        pmax = v;
     }
-    printf("  [Ruiz-only] constraint_rescaling: min=%.3e max=%.3e\n", rmin, rmax);
-    printf("  [Ruiz-only] psd_cone_rescaling  : min=%.3e max=%.3e\n", pmin, pmax);
+    printf("  [Ruiz-only] constraint_rescaling: min=%.3e max=%.3e\n", rmin,
+           rmax);
+    printf("  [Ruiz-only] psd_cone_rescaling  : min=%.3e max=%.3e\n", pmin,
+           pmax);
   }
 
   if (params->has_pock_chambolle_alpha && params->pock_chambolle_alpha > 0.0) {
@@ -691,41 +861,51 @@ rescale_info_t *rescale_problem(const cardal_parameters_t *params,
       double rmin = 1e300, rmax = 0.0, rsum = 0.0;
       for (int i = 0; i < m; i++) {
         double v = info->constraint_rescaling[i];
-        if (v < rmin) rmin = v;
-        if (v > rmax) rmax = v;
+        if (v < rmin)
+          rmin = v;
+        if (v > rmax)
+          rmax = v;
         rsum += v;
       }
       double pmin = 1e300, pmax = 0.0, psum = 0.0;
       int pn = total_r_dim;
       for (int i = 0; i < pn; i++) {
         double v = info->psd_cone_rescaling[i];
-        if (v < pmin) pmin = v;
-        if (v > pmax) pmax = v;
+        if (v < pmin)
+          pmin = v;
+        if (v > pmax)
+          pmax = v;
         psum += v;
       }
       // info->constraint_rescaling[i] is now cumulative (Ruiz * PC).
-      printf("  [cumulative] constraint_rescaling: min=%.3e max=%.3e\n",
-             rmin, rmax);
-      printf("  [cumulative] psd_cone_rescaling  : min=%.3e max=%.3e\n",
-             pmin, pmax);
+      printf("  [cumulative] constraint_rescaling: min=%.3e max=%.3e\n", rmin,
+             rmax);
+      printf("  [cumulative] psd_cone_rescaling  : min=%.3e max=%.3e\n", pmin,
+             pmax);
 
       // PC-after-Ruiz alone = cumulative / Ruiz_only.
       double pcr_min = 1e300, pcr_max = 0.0;
       for (int i = 0; i < m; i++) {
         double rz = ruiz_only_constraint[i];
         double pc = (rz > 0) ? info->constraint_rescaling[i] / rz : 0.0;
-        if (pc < pcr_min) pcr_min = pc;
-        if (pc > pcr_max) pcr_max = pc;
+        if (pc < pcr_min)
+          pcr_min = pc;
+        if (pc > pcr_max)
+          pcr_max = pc;
       }
       double pcp_min = 1e300, pcp_max = 0.0;
       for (int i = 0; i < pn; i++) {
         double rz = ruiz_only_psd[i];
         double pc = (rz > 0) ? info->psd_cone_rescaling[i] / rz : 0.0;
-        if (pc < pcp_min) pcp_min = pc;
-        if (pc > pcp_max) pcp_max = pc;
+        if (pc < pcp_min)
+          pcp_min = pc;
+        if (pc > pcp_max)
+          pcp_max = pc;
       }
-      printf("  [PC-after-Ruiz] constraint: min=%.3e max=%.3e\n", pcr_min, pcr_max);
-      printf("  [PC-after-Ruiz] psd_cone  : min=%.3e max=%.3e\n", pcp_min, pcp_max);
+      printf("  [PC-after-Ruiz] constraint: min=%.3e max=%.3e\n", pcr_min,
+             pcr_max);
+      printf("  [PC-after-Ruiz] psd_cone  : min=%.3e max=%.3e\n", pcp_min,
+             pcp_max);
     }
   }
   free(ruiz_only_constraint);

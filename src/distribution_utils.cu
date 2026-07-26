@@ -64,9 +64,9 @@ grid_context_t initialize_parallel_context(int P_row, int P_rank, int P_cone) {
   CUDA_CHECK(cudaGetDeviceProperties(&prop, local_device_id));
 
   LOG_DBG("[MPI Rank %d] Bound to GPU %d: %s (Total GPUs on node: %d, VRAM: "
-         "%.1f GB)\n",
-         grid.rank_global, local_device_id, prop.name, num_devices,
-         (double)prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
+          "%.1f GB)\n",
+          grid.rank_global, local_device_id, prop.name, num_devices,
+          (double)prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
   fflush(stdout);
 
   int my_cone = grid.rank_global % P_cone;
@@ -82,8 +82,10 @@ grid_context_t initialize_parallel_context(int P_row, int P_rank, int P_cone) {
   int rank_color = my_row * P_cone + my_cone;
   int cone_color = my_row * P_rank + my_rank;
   MPI_Comm_split(grid.comm_global, row_color, grid.rank_global, &grid.comm_row);
-  MPI_Comm_split(grid.comm_global, rank_color, grid.rank_global, &grid.comm_rank);
-  MPI_Comm_split(grid.comm_global, cone_color, grid.rank_global, &grid.comm_cone);
+  MPI_Comm_split(grid.comm_global, rank_color, grid.rank_global,
+                 &grid.comm_rank);
+  MPI_Comm_split(grid.comm_global, cone_color, grid.rank_global,
+                 &grid.comm_cone);
   grid.nccl_row = init_nccl(grid.comm_row);
   grid.nccl_rank = init_nccl(grid.comm_rank);
   grid.nccl_cone = init_nccl(grid.comm_cone);
@@ -105,53 +107,93 @@ static int cmp_by_locality_key(const void *a, const void *b) {
   return (ka > kb) - (ka < kb);
 }
 
-static void compute_nnz_balanced_row_range(
-    const compressed_sdp_problem_t *global_prob, int P_row, int my_row,
-    int *out_start, int *out_end, int *out_local_m) {
+static int cmp_long_long(const void *a, const void *b) {
+  long long x = *(const long long *)a;
+  long long y = *(const long long *)b;
+  return (x > y) - (x < y);
+}
+
+static void
+compute_nnz_balanced_row_range(const compressed_sdp_problem_t *global_prob,
+                               int P_row, int my_row, int *out_start,
+                               int *out_end, int *out_local_m) {
   int m_total = global_prob->num_constraints;
-  long long total_nnz_global =
-      global_prob->constraint_matrix
-          ? (long long)global_prob->constraint_matrix->num_nonzeros
-          : 0;
-  if (P_row <= 1 || total_nnz_global == 0) {
+  if (P_row <= 1) {
     *out_start = 0;
     *out_end = m_total;
     *out_local_m = m_total;
     return;
   }
-  const int *gptr = global_prob->constraint_matrix->row_ptr;
-  long long target_lo = total_nnz_global * (long long)my_row / P_row;
-  long long target_hi = total_nnz_global * (long long)(my_row + 1) / P_row;
-  long long base = gptr[0];
+  long long *prefix =
+      (long long *)safe_calloc((size_t)m_total + 1, sizeof(long long));
+  if (global_prob->constraint_matrix) {
+    const int *gptr = global_prob->constraint_matrix->row_ptr;
+    for (int r = 0; r < m_total; r++)
+      prefix[r + 1] = (long long)gptr[r + 1] - (long long)gptr[r];
+  }
+  if (global_prob->low_rank_data) {
+    const symmetric_low_rank_data_t *lr = global_prob->low_rank_data;
+    for (int j = 0; j < lr->num_columns; j++) {
+      int row = lr->constraint_ind[j];
+      int cone = lr->cone_ind[j];
+      if (row >= 0 && row < m_total && cone >= 0 && cone < global_prob->n_blks)
+        prefix[row + 1] += global_prob->blk_dims[cone];
+    }
+  }
+  for (int r = 0; r < m_total; r++)
+    prefix[r + 1] += prefix[r];
+  long long total_cost = prefix[m_total];
+  if (total_cost == 0) {
+    int base_rows = m_total / P_row;
+    int remainder = m_total % P_row;
+    int start = my_row * base_rows + (my_row < remainder ? my_row : remainder);
+    int count = base_rows + (my_row < remainder ? 1 : 0);
+    *out_start = start;
+    *out_end = start + count;
+    *out_local_m = count;
+    free(prefix);
+    return;
+  }
+  long long target_lo = total_cost * (long long)my_row / P_row;
+  long long target_hi = total_cost * (long long)(my_row + 1) / P_row;
   int lo = 0, hi = m_total;
   while (lo < hi) {
     int mid = lo + (hi - lo) / 2;
-    if (gptr[mid] - base < target_lo) lo = mid + 1;
-    else hi = mid;
+    if (prefix[mid] < target_lo)
+      lo = mid + 1;
+    else
+      hi = mid;
   }
   int start_row = lo;
   lo = start_row;
   hi = m_total;
   while (lo < hi) {
     int mid = lo + (hi - lo) / 2;
-    if (gptr[mid] - base < target_hi) lo = mid + 1;
-    else hi = mid;
+    if (prefix[mid] < target_hi)
+      lo = mid + 1;
+    else
+      hi = mid;
   }
   int end_row = (my_row == P_row - 1) ? m_total : lo;
-  if (end_row < start_row) end_row = start_row;
+  if (end_row < start_row)
+    end_row = start_row;
   *out_start = start_row;
   *out_end = end_row;
   *out_local_m = end_row - start_row;
+  free(prefix);
 }
 
-static void compute_cone_assignment(
-    const compressed_sdp_problem_t *prob, int P_cone,
-    int *owner_per_blk, int *lp_owner_out, int *free_owner_out) {
+static void compute_cone_assignment(const compressed_sdp_problem_t *prob,
+                                    int P_cone, int *owner_per_blk,
+                                    int *lp_owner_out, int *free_owner_out) {
   int n_blks = prob->n_blks;
-  if (lp_owner_out) *lp_owner_out = 0;
-  if (free_owner_out) *free_owner_out = 0;
+  if (lp_owner_out)
+    *lp_owner_out = 0;
+  if (free_owner_out)
+    *free_owner_out = 0;
   if (P_cone <= 1) {
-    for (int b = 0; b < n_blks; b++) owner_per_blk[b] = 0;
+    for (int b = 0; b < n_blks; b++)
+      owner_per_blk[b] = 0;
     return;
   }
 
@@ -161,24 +203,50 @@ static void compute_cone_assignment(
   int b_cursor = 0;
   for (int i = 0; i < n_act; i++) {
     long long g = prob->col_mapping[i];
-    if (g >= prob->total_n_orig) { var_to_blk[i] = -1; continue; }
+    if (g >= prob->total_n_orig) {
+      var_to_blk[i] = -1;
+      continue;
+    }
     while (b_cursor < n_blks && g >= prob->blk_ptr[b_cursor + 1])
       b_cursor++;
     var_to_blk[i] = (b_cursor < n_blks) ? b_cursor : -1;
   }
   int *m_per_blk = (int *)safe_calloc(n_blks > 0 ? n_blks : 1, sizeof(int));
-  int *stamp    = (int *)safe_calloc(n_blks > 0 ? n_blks : 1, sizeof(int));
+  int *stamp = (int *)safe_calloc(n_blks > 0 ? n_blks : 1, sizeof(int));
   int cur_stamp = 0;
   const sparse_csr_matrix_t *A = prob->constraint_matrix;
   for (int r = 0; r < A->num_rows; r++) {
     cur_stamp++;
     for (int p = A->row_ptr[r]; p < A->row_ptr[r + 1]; p++) {
       int c = A->col_ind[p];
-      if (c < 0 || c >= n_act) continue;
+      if (c < 0 || c >= n_act)
+        continue;
       int b = var_to_blk[c];
-      if (b < 0) continue;
-      if (stamp[b] != cur_stamp) { stamp[b] = cur_stamp; m_per_blk[b]++; }
+      if (b < 0)
+        continue;
+      if (stamp[b] != cur_stamp) {
+        stamp[b] = cur_stamp;
+        m_per_blk[b]++;
+      }
     }
+  }
+  if (prob->low_rank_data && prob->low_rank_data->num_columns > 0) {
+    const symmetric_low_rank_data_t *lr = prob->low_rank_data;
+    long long *pairs =
+        (long long *)safe_malloc((size_t)lr->num_columns * sizeof(long long));
+    int npairs = 0;
+    for (int j = 0; j < lr->num_columns; j++) {
+      int row = lr->constraint_ind[j];
+      int cone = lr->cone_ind[j];
+      if (row >= 0 && row < prob->num_constraints && cone >= 0 && cone < n_blks)
+        pairs[npairs++] = (long long)row * n_blks + cone;
+    }
+    qsort(pairs, (size_t)npairs, sizeof(long long), cmp_long_long);
+    for (int j = 0; j < npairs; j++) {
+      if (j == 0 || pairs[j] != pairs[j - 1])
+        m_per_blk[pairs[j] % n_blks]++;
+    }
+    free(pairs);
   }
   free(stamp);
   free(var_to_blk);
@@ -198,11 +266,11 @@ static void compute_cone_assignment(
 
   int item_cap = n_blks + P_cone + 2;
   int *item_blk_starts = (int *)safe_malloc((item_cap + 1) * sizeof(int));
-  int *item_blks =
-      (int *)safe_malloc((n_blks > 0 ? n_blks : 1) * sizeof(int));
-  long long *item_cost =
-      (long long *)safe_malloc((item_cap > 0 ? item_cap : 1) * sizeof(long long));
-  int *item_is_lp = (int *)safe_calloc(item_cap > 0 ? item_cap : 1, sizeof(int));
+  int *item_blks = (int *)safe_malloc((n_blks > 0 ? n_blks : 1) * sizeof(int));
+  long long *item_cost = (long long *)safe_malloc(
+      (item_cap > 0 ? item_cap : 1) * sizeof(long long));
+  int *item_is_lp =
+      (int *)safe_calloc(item_cap > 0 ? item_cap : 1, sizeof(int));
   int *item_is_free =
       (int *)safe_calloc(item_cap > 0 ? item_cap : 1, sizeof(int));
   int *item_is_batch =
@@ -227,12 +295,15 @@ static void compute_cone_assignment(
       int g_end = b;
       int N = g_end - g_start;
       int K_cap = N / min_batch;
-      if (K_cap < 1) K_cap = 1;
+      if (K_cap < 1)
+        K_cap = 1;
       int K = (P_cone < K_cap) ? P_cone : K_cap;
-      if (K < 1) K = 1;
-      if (K > N) K = N;
+      if (K < 1)
+        K = 1;
+      if (K > N)
+        K = N;
       int chunk_base = N / K;
-      int chunk_rem  = N % K;
+      int chunk_rem = N % K;
       int cur = g_start;
       for (int k = 0; k < K; k++) {
         int chunk = chunk_base + (k < chunk_rem ? 1 : 0);
@@ -266,27 +337,32 @@ static void compute_cone_assignment(
   free(cost_b);
 
   int *order = (int *)safe_malloc((n_items > 0 ? n_items : 1) * sizeof(int));
-  for (int i = 0; i < n_items; i++) order[i] = i;
+  for (int i = 0; i < n_items; i++)
+    order[i] = i;
   g_cmp_cost_ptr = item_cost;
   qsort(order, n_items, sizeof(int), cmp_idx_by_cost_desc);
   g_cmp_cost_ptr = NULL;
 
   long long *rank_load = (long long *)safe_calloc(P_cone, sizeof(long long));
   long long *batch_load = (long long *)safe_calloc(P_cone, sizeof(long long));
-  int *item_owner = (int *)safe_malloc((n_items > 0 ? n_items : 1) * sizeof(int));
+  int *item_owner =
+      (int *)safe_malloc((n_items > 0 ? n_items : 1) * sizeof(int));
   for (int i = 0; i < n_items; i++) {
     int it = order[i];
-    if (item_is_batch[it]) continue;
+    if (item_is_batch[it])
+      continue;
     int min_r = 0;
     for (int r = 1; r < P_cone; r++)
-      if (rank_load[r] < rank_load[min_r]) min_r = r;
+      if (rank_load[r] < rank_load[min_r])
+        min_r = r;
     item_owner[it] = min_r;
     rank_load[min_r] += item_cost[it];
   }
 
   for (int i = 0; i < n_items; i++) {
     int it = order[i];
-    if (!item_is_batch[it]) continue;
+    if (!item_is_batch[it])
+      continue;
     int min_r = 0;
     for (int r = 1; r < P_cone; r++) {
       if (batch_load[r] < batch_load[min_r] ||
@@ -302,16 +378,20 @@ static void compute_cone_assignment(
   free(order);
 
   // ---- materialize owner_per_blk[] and linear-block owners ----
-  for (int bb = 0; bb < n_blks; bb++) owner_per_blk[bb] = -1;
+  for (int bb = 0; bb < n_blks; bb++)
+    owner_per_blk[bb] = -1;
   for (int i = 0; i < n_items; i++) {
     int owner = item_owner[i];
     if (item_is_lp[i]) {
-      if (lp_owner_out) *lp_owner_out = owner;
+      if (lp_owner_out)
+        *lp_owner_out = owner;
     } else if (item_is_free[i]) {
-      if (free_owner_out) *free_owner_out = owner;
+      if (free_owner_out)
+        *free_owner_out = owner;
     } else {
       int s = item_blk_starts[i], e = item_blk_starts[i + 1];
-      for (int p = s; p < e; p++) owner_per_blk[item_blks[p]] = owner;
+      for (int p = s; p < e; p++)
+        owner_per_blk[item_blks[p]] = owner;
     }
   }
 
@@ -346,7 +426,6 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
   int P_cone = grid->dims[2];
   int my_cone = grid->coords[2];
 
-  int m_total = global_prob->num_constraints;
   int start_row, end_row, local_m;
   compute_nnz_balanced_row_range(global_prob, P_row, my_row, &start_row,
                                  &end_row, &local_m);
@@ -363,14 +442,21 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
                           &free_owner);
 
   int lp_dim_global = global_prob->lp_dim;
-  int lp_dim_local = (lp_dim_global > 0 && lp_owner == my_cone) ? lp_dim_global : 0;
+  int lp_dim_local =
+      (lp_dim_global > 0 && lp_owner == my_cone) ? lp_dim_global : 0;
   int free_dim_global = global_prob->free_dim;
   int free_dim_local =
       (free_dim_global > 0 && free_owner == my_cone) ? free_dim_global : 0;
 
   int n_blks_local = 0;
+  int *global_to_local_cone = (int *)safe_malloc(
+      (size_t)(n_blks_global > 0 ? n_blks_global : 1) * sizeof(int));
   for (int b = 0; b < n_blks_global; b++)
-    if (owner_per_blk[b] == my_cone) n_blks_local++;
+    global_to_local_cone[b] = -1;
+  for (int b = 0; b < n_blks_global; b++) {
+    if (owner_per_blk[b] == my_cone)
+      global_to_local_cone[b] = n_blks_local++;
+  }
 
   int n_act_global = global_prob->n_active_vars;
   int lp_start_active = global_prob->lp_start_idx;
@@ -378,15 +464,16 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
   int *keep_idx = (int *)safe_malloc(n_act_global * sizeof(int));
   int n_act_local = 0;
 
-  char *col_used = (char *)safe_calloc(
-      n_act_global > 0 ? (size_t)n_act_global : 1, 1);
+  char *col_used =
+      (char *)safe_calloc(n_act_global > 0 ? (size_t)n_act_global : 1, 1);
   {
     sparse_csr_matrix_t *g_csr_scan = global_prob->constraint_matrix;
     for (int r = start_row; r < end_row; r++) {
-      for (int p = g_csr_scan->row_ptr[r];
-           p < g_csr_scan->row_ptr[r + 1]; p++) {
+      for (int p = g_csr_scan->row_ptr[r]; p < g_csr_scan->row_ptr[r + 1];
+           p++) {
         int c = g_csr_scan->col_ind[p];
-        if (c >= 0 && c < n_act_global) col_used[c] = 1;
+        if (c >= 0 && c < n_act_global)
+          col_used[c] = 1;
       }
     }
 
@@ -398,11 +485,17 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
         int lo = 0, hi = n_act_global - 1, found = -1;
         while (lo <= hi) {
           int mid = lo + (hi - lo) / 2;
-          if (cm[mid] == pos) { found = mid; break; }
-          if (cm[mid] < pos) lo = mid + 1;
-          else hi = mid - 1;
+          if (cm[mid] == pos) {
+            found = mid;
+            break;
+          }
+          if (cm[mid] < pos)
+            lo = mid + 1;
+          else
+            hi = mid - 1;
         }
-        if (found >= 0) col_used[found] = 1;
+        if (found >= 0)
+          col_used[found] = 1;
       }
     }
   }
@@ -420,8 +513,8 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
         while (b_cursor < n_blks_global &&
                g >= global_prob->blk_ptr[b_cursor + 1])
           b_cursor++;
-        owned = (b_cursor < n_blks_global &&
-                 owner_per_blk[b_cursor] == my_cone);
+        owned =
+            (b_cursor < n_blks_global && owner_per_blk[b_cursor] == my_cone);
       }
 
       int is_linear = i >= lp_start_active;
@@ -431,13 +524,28 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
   }
   free(col_used);
 
+  long long local_dummy_mapping = -1;
+  if (n_act_local == 0 && n_blks_local > 0) {
+    for (int b = 0; b < n_blks_global; b++) {
+      if (global_to_local_cone[b] >= 0) {
+        local_dummy_mapping = global_prob->blk_ptr[b];
+        n_act_local = 1;
+        break;
+      }
+    }
+  }
+
   long long *local_col_mapping = NULL;
   if (n_act_local > 0) {
     local_col_mapping =
         (long long *)safe_malloc(n_act_local * sizeof(long long));
-    for (int i = 0, j = 0; i < n_act_global; i++) {
-      if (keep_idx[i] >= 0)
-        local_col_mapping[j++] = global_prob->col_mapping[i];
+    if (local_dummy_mapping >= 0) {
+      local_col_mapping[0] = local_dummy_mapping;
+    } else {
+      for (int i = 0, j = 0; i < n_act_global; i++) {
+        if (keep_idx[i] >= 0)
+          local_col_mapping[j++] = global_prob->col_mapping[i];
+      }
     }
   }
 
@@ -445,10 +553,8 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
       (compressed_sdp_problem_t *)calloc(1, sizeof(compressed_sdp_problem_t));
 
   local_prob->num_constraints = local_m;
-  local_prob->right_hand_side =
-      (double *)safe_malloc(local_m * sizeof(double));
-  memcpy(local_prob->right_hand_side,
-         global_prob->right_hand_side + start_row,
+  local_prob->right_hand_side = (double *)safe_malloc(local_m * sizeof(double));
+  memcpy(local_prob->right_hand_side, global_prob->right_hand_side + start_row,
          local_m * sizeof(double));
 
   local_prob->n_blks = n_blks_local;
@@ -464,7 +570,8 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
         (long long *)safe_malloc((n_blks_local + 1) * sizeof(long long));
     int w = 0;
     for (int b = 0; b < n_blks_global; b++) {
-      if (owner_per_blk[b] != my_cone) continue;
+      if (owner_per_blk[b] != my_cone)
+        continue;
       local_prob->blk_dims[w] = global_prob->blk_dims[b];
       local_prob->blk_ptr[w] = global_prob->blk_ptr[b];
       local_prob->blk_ptr[w + 1] = global_prob->blk_ptr[b + 1];
@@ -476,8 +583,7 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
     local_prob->blk_ptr[0] = 0;
   }
   local_prob->free_start_idx = n_act_local - free_dim_local;
-  local_prob->lp_start_idx =
-      local_prob->free_start_idx - lp_dim_local;
+  local_prob->lp_start_idx = local_prob->free_start_idx - lp_dim_local;
 
   sparse_csr_matrix_t *g_csr = global_prob->constraint_matrix;
   sparse_csr_matrix_t *l_csr =
@@ -490,15 +596,16 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
     int gr = start_row + r;
     int cnt = 0;
     for (int p = g_csr->row_ptr[gr]; p < g_csr->row_ptr[gr + 1]; p++) {
-      if (keep_idx[g_csr->col_ind[p]] >= 0) cnt++;
+      if (keep_idx[g_csr->col_ind[p]] >= 0)
+        cnt++;
     }
     new_row_ptr[r + 1] = new_row_ptr[r] + cnt;
   }
   int local_nnz = new_row_ptr[local_m];
   int *new_col_ind =
       (int *)safe_malloc((local_nnz > 0 ? local_nnz : 1) * sizeof(int));
-  double *new_val = (double *)safe_malloc(
-      (local_nnz > 0 ? local_nnz : 1) * sizeof(double));
+  double *new_val =
+      (double *)safe_malloc((local_nnz > 0 ? local_nnz : 1) * sizeof(double));
   for (int r = 0, w = 0; r < local_m; r++) {
     int gr = start_row + r;
     for (int p = g_csr->row_ptr[gr]; p < g_csr->row_ptr[gr + 1]; p++) {
@@ -521,14 +628,15 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
     sparse_vector_t *g_obj = global_prob->objective_vector_sparse;
     int keep_obj = 0;
     if (n_blks_local > 0) {
-      long long *owned_lo = (long long *)safe_malloc(
-          n_blks_local * sizeof(long long));
-      long long *owned_hi = (long long *)safe_malloc(
-          n_blks_local * sizeof(long long));
+      long long *owned_lo =
+          (long long *)safe_malloc(n_blks_local * sizeof(long long));
+      long long *owned_hi =
+          (long long *)safe_malloc(n_blks_local * sizeof(long long));
       {
         int w = 0;
         for (int b = 0; b < n_blks_global; b++) {
-          if (owner_per_blk[b] != my_cone) continue;
+          if (owner_per_blk[b] != my_cone)
+            continue;
           owned_lo[w] = global_prob->blk_ptr[b];
           owned_hi[w] = global_prob->blk_ptr[b + 1];
           w++;
@@ -545,10 +653,10 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
       sparse_vector_t *l_obj =
           (sparse_vector_t *)safe_malloc(sizeof(sparse_vector_t));
       l_obj->len = keep_obj;
-      l_obj->pos = (long long *)safe_malloc(
-          (keep_obj > 0 ? keep_obj : 1) * sizeof(long long));
-      l_obj->val = (double *)safe_malloc(
-          (keep_obj > 0 ? keep_obj : 1) * sizeof(double));
+      l_obj->pos = (long long *)safe_malloc((keep_obj > 0 ? keep_obj : 1) *
+                                            sizeof(long long));
+      l_obj->val =
+          (double *)safe_malloc((keep_obj > 0 ? keep_obj : 1) * sizeof(double));
       blk_cur = 0;
       for (int i = 0, w = 0; i < g_obj->len; i++) {
         long long p = g_obj->pos[i];
@@ -575,11 +683,64 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
     local_prob->objective_vector_sparse = NULL;
   }
 
+  if (global_prob->low_rank_data) {
+    const symmetric_low_rank_data_t *src = global_prob->low_rank_data;
+    int local_columns = 0;
+    long long local_factor_count = 0;
+    for (int j = 0; j < src->num_columns; j++) {
+      int cone = src->cone_ind[j];
+      int row = src->constraint_ind[j];
+      int keep = cone >= 0 && cone < n_blks_global &&
+                 global_to_local_cone[cone] >= 0 &&
+                 (row < 0 ? my_row == 0 : (row >= start_row && row < end_row));
+      if (keep) {
+        local_columns++;
+        local_factor_count += src->factor_ptr[j + 1] - src->factor_ptr[j];
+      }
+    }
+    if (local_columns > 0) {
+      symmetric_low_rank_data_t *dst = (symmetric_low_rank_data_t *)safe_calloc(
+          1, sizeof(symmetric_low_rank_data_t));
+      dst->num_columns = local_columns;
+      dst->constraint_ind =
+          (int *)safe_malloc((size_t)local_columns * sizeof(int));
+      dst->cone_ind = (int *)safe_malloc((size_t)local_columns * sizeof(int));
+      dst->factor_ptr = (long long *)safe_malloc((size_t)(local_columns + 1) *
+                                                 sizeof(long long));
+      dst->factor_values =
+          (double *)safe_malloc((size_t)local_factor_count * sizeof(double));
+      dst->weights =
+          (double *)safe_malloc((size_t)local_columns * sizeof(double));
+      int w = 0;
+      long long factor_w = 0;
+      dst->factor_ptr[0] = 0;
+      for (int j = 0; j < src->num_columns; j++) {
+        int cone = src->cone_ind[j];
+        int row = src->constraint_ind[j];
+        int keep =
+            cone >= 0 && cone < n_blks_global &&
+            global_to_local_cone[cone] >= 0 &&
+            (row < 0 ? my_row == 0 : (row >= start_row && row < end_row));
+        if (!keep)
+          continue;
+        long long count = src->factor_ptr[j + 1] - src->factor_ptr[j];
+        dst->constraint_ind[w] = row < 0 ? -1 : row - start_row;
+        dst->cone_ind[w] = global_to_local_cone[cone];
+        dst->weights[w] = src->weights[j];
+        memcpy(dst->factor_values + factor_w,
+               src->factor_values + src->factor_ptr[j],
+               (size_t)count * sizeof(double));
+        factor_w += count;
+        dst->factor_ptr[++w] = factor_w;
+      }
+      local_prob->low_rank_data = dst;
+    }
+  }
+
   if (lp_dim_local > 0 && global_prob->lp_objective_vector != NULL) {
     local_prob->lp_objective_vector =
         (double *)safe_malloc(lp_dim_local * sizeof(double));
-    memcpy(local_prob->lp_objective_vector,
-           global_prob->lp_objective_vector,
+    memcpy(local_prob->lp_objective_vector, global_prob->lp_objective_vector,
            lp_dim_local * sizeof(double));
   } else {
     local_prob->lp_objective_vector = NULL;
@@ -588,13 +749,13 @@ partition_problem(const compressed_sdp_problem_t *global_prob,
     local_prob->free_objective_vector =
         (double *)safe_malloc(free_dim_local * sizeof(double));
     memcpy(local_prob->free_objective_vector,
-           global_prob->free_objective_vector,
-           free_dim_local * sizeof(double));
+           global_prob->free_objective_vector, free_dim_local * sizeof(double));
   } else {
     local_prob->free_objective_vector = NULL;
   }
 
   free(keep_idx);
+  free(global_to_local_cone);
   free(owner_per_blk);
   return local_prob;
 }
@@ -617,21 +778,19 @@ partition_rescale_info(const rescale_info_t *global_info,
   (void)end_row;
 
   int n_blks_global = global_prob->n_blks;
-  int *owner_per_blk = (int *)safe_malloc(
-      (n_blks_global > 0 ? n_blks_global : 1) * sizeof(int));
+  int *owner_per_blk =
+      (int *)safe_malloc((n_blks_global > 0 ? n_blks_global : 1) * sizeof(int));
   int lp_owner = 0, free_owner = 0;
   compute_cone_assignment(global_prob, P_cone, owner_per_blk, &lp_owner,
                           &free_owner);
-  int lp_dim_local =
-      (global_prob->lp_dim > 0 && lp_owner == my_cone) ? global_prob->lp_dim
-                                                       : 0;
-  int free_dim_local =
-      (global_prob->free_dim > 0 && free_owner == my_cone)
-          ? global_prob->free_dim
-          : 0;
+  int lp_dim_local = (global_prob->lp_dim > 0 && lp_owner == my_cone)
+                         ? global_prob->lp_dim
+                         : 0;
+  int free_dim_local = (global_prob->free_dim > 0 && free_owner == my_cone)
+                           ? global_prob->free_dim
+                           : 0;
 
-  rescale_info_t *li =
-      (rescale_info_t *)safe_calloc(1, sizeof(rescale_info_t));
+  rescale_info_t *li = (rescale_info_t *)safe_calloc(1, sizeof(rescale_info_t));
   li->scaled_problem = NULL;
   li->objective_vector_rescaling = global_info->objective_vector_rescaling;
   li->right_hand_side_rescaling = global_info->right_hand_side_rescaling;
@@ -682,8 +841,7 @@ partition_rescale_info(const rescale_info_t *global_info,
   } else {
     li->lp_variable_rescaling = NULL;
   }
-  if (free_dim_local > 0 &&
-      global_info->free_variable_rescaling != NULL) {
+  if (free_dim_local > 0 && global_info->free_variable_rescaling != NULL) {
     li->free_variable_rescaling =
         (double *)safe_malloc((size_t)free_dim_local * sizeof(double));
     memcpy(li->free_variable_rescaling, global_info->free_variable_rescaling,
@@ -699,41 +857,39 @@ partition_rescale_info(const rescale_info_t *global_info,
 void select_valid_grid_size(const cardal_parameters_t *params,
                             const compressed_sdp_problem_t *original_problem,
                             cardal_parameters_t *sub_params) {
-    (void)original_problem;
-    int world_size, rank_global;
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank_global);
+  (void)original_problem;
+  int world_size, rank_global;
+  MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank_global);
 
-    if (params->grid_size.decided) {
-        int provided_row = params->grid_size.row_dims;
-        int provided_rank = params->grid_size.rank_dims;
-        int provided_cone = params->grid_size.cone_dims > 0
-                              ? params->grid_size.cone_dims
-                              : 1;
-        int product = provided_row * provided_rank * provided_cone;
+  if (params->grid_size.decided) {
+    int provided_row = params->grid_size.row_dims;
+    int provided_rank = params->grid_size.rank_dims;
+    int provided_cone =
+        params->grid_size.cone_dims > 0 ? params->grid_size.cone_dims : 1;
+    int product = provided_row * provided_rank * provided_cone;
 
-        if (product != world_size) {
-            if (rank_global == 0) {
-                fprintf(stderr, "\n[Error] MPI World Size Mismatch!\n");
-                fprintf(stderr, "------------------------------------------------\n");
-                fprintf(stderr,
-                        "User specified grid:  %d x %d x %d = %d processes\n",
-                        provided_row, provided_rank, provided_cone, product);
-                fprintf(stderr, "Actual MPI world size: %d processes\n", world_size);
-                fprintf(stderr, "Please adjust mpirun -n or --grid-size.\n");
-                fprintf(stderr, "------------------------------------------------\n");
-            }
-            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
-        }
-        sub_params->grid_size.row_dims = provided_row;
-        sub_params->grid_size.rank_dims = provided_rank;
-        sub_params->grid_size.cone_dims = provided_cone;
-    } else {
-        sub_params->grid_size.row_dims = world_size;
-        sub_params->grid_size.rank_dims = 1;
-        sub_params->grid_size.cone_dims = 1;
-        sub_params->grid_size.decided = true;
+    if (product != world_size) {
+      if (rank_global == 0) {
+        fprintf(stderr, "\n[Error] MPI World Size Mismatch!\n");
+        fprintf(stderr, "------------------------------------------------\n");
+        fprintf(stderr, "User specified grid:  %d x %d x %d = %d processes\n",
+                provided_row, provided_rank, provided_cone, product);
+        fprintf(stderr, "Actual MPI world size: %d processes\n", world_size);
+        fprintf(stderr, "Please adjust mpirun -n or --grid-size.\n");
+        fprintf(stderr, "------------------------------------------------\n");
+      }
+      MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
     }
+    sub_params->grid_size.row_dims = provided_row;
+    sub_params->grid_size.rank_dims = provided_rank;
+    sub_params->grid_size.cone_dims = provided_cone;
+  } else {
+    sub_params->grid_size.row_dims = world_size;
+    sub_params->grid_size.rank_dims = 1;
+    sub_params->grid_size.cone_dims = 1;
+    sub_params->grid_size.decided = true;
+  }
 }
 
 #define CHUNK_SIZE (1024 * 1024 * 1024)
@@ -818,6 +974,18 @@ void serialize_compressed_sdp(const compressed_sdp_problem_t *prob,
     size += prob->objective_vector_sparse->len * sizeof(long long);
     size += prob->objective_vector_sparse->len * sizeof(double);
   }
+  int has_low_rank =
+      prob->low_rank_data != NULL && prob->low_rank_data->num_columns > 0;
+  size += sizeof(int);
+  if (has_low_rank) {
+    int k = prob->low_rank_data->num_columns;
+    long long factor_count = prob->low_rank_data->factor_ptr[k];
+    size += sizeof(int);
+    size += (size_t)k * sizeof(int) * 2;
+    size += (size_t)(k + 1) * sizeof(long long);
+    size += (size_t)k * sizeof(double);
+    size += (size_t)factor_count * sizeof(double);
+  }
 
   *out_buf = safe_malloc(size);
   *out_size = size;
@@ -877,6 +1045,19 @@ void serialize_compressed_sdp(const compressed_sdp_problem_t *prob,
               prob->objective_vector_sparse->len * sizeof(long long));
     WRITE_BUF(prob->objective_vector_sparse->val,
               prob->objective_vector_sparse->len * sizeof(double));
+  }
+  WRITE_BUF(&has_low_rank, sizeof(int));
+  if (has_low_rank) {
+    int k = prob->low_rank_data->num_columns;
+    long long factor_count = prob->low_rank_data->factor_ptr[k];
+    WRITE_BUF(&k, sizeof(int));
+    WRITE_BUF(prob->low_rank_data->constraint_ind, (size_t)k * sizeof(int));
+    WRITE_BUF(prob->low_rank_data->cone_ind, (size_t)k * sizeof(int));
+    WRITE_BUF(prob->low_rank_data->factor_ptr,
+              (size_t)(k + 1) * sizeof(long long));
+    WRITE_BUF(prob->low_rank_data->weights, (size_t)k * sizeof(double));
+    WRITE_BUF(prob->low_rank_data->factor_values,
+              (size_t)factor_count * sizeof(double));
   }
 }
 
@@ -975,6 +1156,28 @@ compressed_sdp_problem_t *deserialize_compressed_sdp(void *buf) {
         (double *)safe_malloc(len * sizeof(double));
     READ_BUF(prob->objective_vector_sparse->val, len * sizeof(double));
   }
+  int has_low_rank;
+  READ_BUF(&has_low_rank, sizeof(int));
+  if (has_low_rank) {
+    symmetric_low_rank_data_t *lr = (symmetric_low_rank_data_t *)safe_calloc(
+        1, sizeof(symmetric_low_rank_data_t));
+    READ_BUF(&lr->num_columns, sizeof(int));
+    int k = lr->num_columns;
+    lr->constraint_ind = (int *)safe_malloc((size_t)k * sizeof(int));
+    lr->cone_ind = (int *)safe_malloc((size_t)k * sizeof(int));
+    lr->factor_ptr =
+        (long long *)safe_malloc((size_t)(k + 1) * sizeof(long long));
+    lr->weights = (double *)safe_malloc((size_t)k * sizeof(double));
+    READ_BUF(lr->constraint_ind, (size_t)k * sizeof(int));
+    READ_BUF(lr->cone_ind, (size_t)k * sizeof(int));
+    READ_BUF(lr->factor_ptr, (size_t)(k + 1) * sizeof(long long));
+    READ_BUF(lr->weights, (size_t)k * sizeof(double));
+    long long factor_count = lr->factor_ptr[k];
+    lr->factor_values =
+        (double *)safe_malloc((size_t)factor_count * sizeof(double));
+    READ_BUF(lr->factor_values, (size_t)factor_count * sizeof(double));
+    prob->low_rank_data = lr;
+  }
 
   return prob;
 }
@@ -1055,16 +1258,28 @@ int *permute_global_problem_constraints(compressed_sdp_problem_t *prob,
         keys[i] = (unsigned long long)-1;
       } else {
         unsigned long long c0 = (unsigned int)col_ind[s];
-        unsigned long long c1 =
-            (s + 1 < e) ? (unsigned int)col_ind[s + 1] : c0;
+        unsigned long long c1 = (s + 1 < e) ? (unsigned int)col_ind[s + 1] : c0;
         keys[i] = (c0 << 32) | c1;
       }
     }
-    for (int i = 0; i < m; i++) p[i] = i;
+    for (int i = 0; i < m; i++)
+      p[i] = i;
     g_locality_keys = keys;
     qsort(p, (size_t)m, sizeof(int), cmp_by_locality_key);
     g_locality_keys = NULL;
     free(keys);
+  }
+
+  if (prob->low_rank_data) {
+    int *old_to_new = (int *)safe_malloc((size_t)m * sizeof(int));
+    for (int i = 0; i < m; i++)
+      old_to_new[p[i]] = i;
+    for (int j = 0; j < prob->low_rank_data->num_columns; j++) {
+      int row = prob->low_rank_data->constraint_ind[j];
+      if (row >= 0 && row < m)
+        prob->low_rank_data->constraint_ind[j] = old_to_new[row];
+    }
+    free(old_to_new);
   }
 
   int nnz = prob->constraint_matrix->num_nonzeros;
@@ -1122,8 +1337,7 @@ void unpermute_dual_solution(int m, const double *shuffled_global_dual,
   }
 }
 
-void gather_sdp_result(sdp_result_t *result,
-                                         cardal_sdp_solver_state_t *state) {
+void gather_sdp_result(sdp_result_t *result, cardal_sdp_solver_state_t *state) {
   if (!result || !state || !state->grid_context)
     return;
   grid_context_t *gc = state->grid_context;
@@ -1157,8 +1371,8 @@ void gather_sdp_result(sdp_result_t *result,
   const double *R_local_host = result->low_rank_primal_solution;
   long long local_psd_len = result->psd_factor_length;
 
-  long long *off_local = (long long *)safe_malloc(
-      (size_t)(n_blks + 1) * sizeof(long long));
+  long long *off_local =
+      (long long *)safe_malloc((size_t)(n_blks + 1) * sizeof(long long));
   off_local[0] = 0;
   for (int b = 0; b < n_blks; b++)
     off_local[b + 1] =
@@ -1175,8 +1389,8 @@ void gather_sdp_result(sdp_result_t *result,
   long long *off_global = NULL;
   double *R_global = NULL;
   if (my_rank == 0) {
-    off_global = (long long *)safe_malloc((size_t)(n_blks + 1) *
-                                          sizeof(long long));
+    off_global =
+        (long long *)safe_malloc((size_t)(n_blks + 1) * sizeof(long long));
     off_global[0] = 0;
     for (int b = 0; b < n_blks; b++)
       off_global[b + 1] =
@@ -1203,8 +1417,8 @@ void gather_sdp_result(sdp_result_t *result,
       }
     }
     MPI_Gatherv(R_local_host + off_local[b], send_count, MPI_DOUBLE,
-                my_rank == 0 ? (R_global + off_global[b]) : NULL,
-                recvcounts, displs, MPI_DOUBLE, 0, gc->comm_rank);
+                my_rank == 0 ? (R_global + off_global[b]) : NULL, recvcounts,
+                displs, MPI_DOUBLE, 0, gc->comm_rank);
     if (my_rank == 0) {
       free(recvcounts);
       free(displs);
@@ -1230,8 +1444,7 @@ void gather_sdp_result(sdp_result_t *result,
     result->low_rank_solution_length = total_global;
     result->psd_factor_length = global_psd_len;
     result->lp_solution_offset = (int)global_psd_len;
-    result->free_solution_offset =
-        (int)(global_psd_len + state->lp_dim);
+    result->free_solution_offset = (int)(global_psd_len + state->lp_dim);
     free(result->rank_list);
     result->rank_list = rank_global;
     free(off_global);
@@ -1250,29 +1463,37 @@ void gather_sdp_result(sdp_result_t *result,
 
 static void format_dim_count_str(const int *dims, const int *counts, int n,
                                  char *out, int out_cap) {
-  if (n == 0) { snprintf(out, out_cap, "-"); return; }
+  if (n == 0) {
+    snprintf(out, out_cap, "-");
+    return;
+  }
   int idx[64];
-  if (n > 64) n = 64;
-  for (int i = 0; i < n; i++) idx[i] = i;
+  if (n > 64)
+    n = 64;
+  for (int i = 0; i < n; i++)
+    idx[i] = i;
   for (int i = 1; i < n; i++) {
     int k = idx[i], j = i;
-    while (j > 0 && dims[idx[j - 1]] < dims[k]) { idx[j] = idx[j - 1]; j--; }
+    while (j > 0 && dims[idx[j - 1]] < dims[k]) {
+      idx[j] = idx[j - 1];
+      j--;
+    }
     idx[j] = k;
   }
   int pos = 0;
   for (int i = 0; i < n && pos < out_cap - 1; i++) {
     int j = idx[i];
-    int w = snprintf(out + pos, out_cap - pos, "%s%dx%d",
-                     i > 0 ? ", " : "", counts[j], dims[j]);
-    if (w < 0) break;
+    int w = snprintf(out + pos, out_cap - pos, "%s%dx%d", i > 0 ? ", " : "",
+                     counts[j], dims[j]);
+    if (w < 0)
+      break;
     pos += w;
   }
 }
 
 void print_per_rank_workload(const grid_context_t *grid,
                              const compressed_sdp_problem_t *local_prob,
-                             int m_total_global,
-                             int initial_rank_global) {
+                             int m_total_global, int initial_rank_global) {
   enum {
     WL_STR_CAP = 96,
   };
@@ -1284,28 +1505,38 @@ void print_per_rank_workload(const grid_context_t *grid,
   int my_grid_row = grid->coords[0];
   int my_grid_rank = grid->coords[1];
 
-  int bm_base = (P_rank > 0) ? initial_rank_global / P_rank : initial_rank_global;
-  int bm_rem  = (P_rank > 0) ? initial_rank_global % P_rank : 0;
+  int bm_base =
+      (P_rank > 0) ? initial_rank_global / P_rank : initial_rank_global;
+  int bm_rem = (P_rank > 0) ? initial_rank_global % P_rank : 0;
   int bm_count_local = bm_base + (my_grid_rank < bm_rem ? 1 : 0);
 
   int row_base = (P_row > 0) ? m_total_global / P_row : m_total_global;
-  int row_rem  = (P_row > 0) ? m_total_global % P_row : 0;
-  int local_m  = row_base + (my_grid_row < row_rem ? 1 : 0);
+  int row_rem = (P_row > 0) ? m_total_global % P_row : 0;
+  int local_m = row_base + (my_grid_row < row_rem ? 1 : 0);
 
   int single_dims[64], single_counts[64], n_single = 0;
-  int batch_dims[64],  batch_counts[64],  n_batch  = 0;
+  int batch_dims[64], batch_counts[64], n_batch = 0;
   (void)INT_MAX;
   for (int i = 0; i < local_prob->n_blks; i++) {
     int d = local_prob->blk_dims[i];
     int is_batch = (d <= CARDAL_SMALL_CONE_DIM_THRESHOLD);
-    int *dims  = is_batch ? batch_dims  : single_dims;
-    int *cnts  = is_batch ? batch_counts : single_counts;
-    int *np    = is_batch ? &n_batch    : &n_single;
-    int cap    = 64;
+    int *dims = is_batch ? batch_dims : single_dims;
+    int *cnts = is_batch ? batch_counts : single_counts;
+    int *np = is_batch ? &n_batch : &n_single;
+    int cap = 64;
     int found = -1;
-    for (int j = 0; j < *np; j++) if (dims[j] == d) { found = j; break; }
-    if (found >= 0) cnts[found]++;
-    else if (*np < cap) { dims[*np] = d; cnts[*np] = 1; (*np)++; }
+    for (int j = 0; j < *np; j++)
+      if (dims[j] == d) {
+        found = j;
+        break;
+      }
+    if (found >= 0)
+      cnts[found]++;
+    else if (*np < cap) {
+      dims[*np] = d;
+      cnts[*np] = 1;
+      (*np)++;
+    }
   }
 
   char single_str[WL_STR_CAP];
@@ -1327,25 +1558,25 @@ void print_per_rank_workload(const grid_context_t *grid,
   my_ints[5] = local_prob->lp_dim;
   my_ints[6] = local_prob->n_blks;
   char *my_single = my_blob + N_INTS * sizeof(int);
-  char *my_batch  = my_single + WL_STR_CAP;
+  char *my_batch = my_single + WL_STR_CAP;
   snprintf(my_single, WL_STR_CAP, "%s", single_str);
-  snprintf(my_batch,  WL_STR_CAP, "%s", batch_str);
+  snprintf(my_batch, WL_STR_CAP, "%s", batch_str);
 
   char *all_blobs = NULL;
   if (my_world == 0) {
     all_blobs = (char *)safe_malloc(world_size * blob_bytes);
   }
-  MPI_Gather(my_blob, (int)blob_bytes, MPI_BYTE, all_blobs,
-             (int)blob_bytes, MPI_BYTE, 0, grid->comm_global);
+  MPI_Gather(my_blob, (int)blob_bytes, MPI_BYTE, all_blobs, (int)blob_bytes,
+             MPI_BYTE, 0, grid->comm_global);
 
   if (my_world == 0 && LOG_V(2)) {
     print_subtitle("Per-rank Workload");
     printf("  single cone = dim > %d (PERCONE);  batch cone = dim <= %d "
            "(Batched CUSTOM).\n",
            CARDAL_SMALL_CONE_DIM_THRESHOLD, CARDAL_SMALL_CONE_DIM_THRESHOLD);
-    printf("  %-5s %-9s | %-5s | %-7s | %-3s | %-26s | %s\n",
-           "world", "(r,k,c)", "rows", "BM-rank", "LP",
-           "single cones (n x dim)", "batch cones (n x dim)");
+    printf("  %-5s %-9s | %-5s | %-7s | %-3s | %-26s | %s\n", "world",
+           "(r,k,c)", "rows", "BM-rank", "LP", "single cones (n x dim)",
+           "batch cones (n x dim)");
     for (int w = 0; w < world_size; w++) {
       const char *blob = all_blobs + w * blob_bytes;
       const int *ip = (const int *)blob;
@@ -1356,16 +1587,17 @@ void print_per_rank_workload(const grid_context_t *grid,
       double bm_pct =
           (initial_rank_global > 0) ? 100.0 * ip[4] / initial_rank_global : 0.0;
       char coord[16], rowstr[8], bmstr[8], lpstr[8];
-      snprintf(coord,  sizeof(coord),  "(%d,%d,%d)", ip[0], ip[1], ip[2]);
+      snprintf(coord, sizeof(coord), "(%d,%d,%d)", ip[0], ip[1], ip[2]);
       snprintf(rowstr, sizeof(rowstr), "%.0f%%", row_pct);
-      snprintf(bmstr,  sizeof(bmstr),  "%.0f%%", bm_pct);
-      snprintf(lpstr,  sizeof(lpstr),  "%s", ip[5] > 0 ? "yes" : "-");
-      printf("  %-5d %-9s | %-5s | %-7s | %-3s | %-26s | %s\n",
-             w, coord, rowstr, bmstr, lpstr, sstr, bstr);
+      snprintf(bmstr, sizeof(bmstr), "%.0f%%", bm_pct);
+      snprintf(lpstr, sizeof(lpstr), "%s", ip[5] > 0 ? "yes" : "-");
+      printf("  %-5d %-9s | %-5s | %-7s | %-3s | %-26s | %s\n", w, coord,
+             rowstr, bmstr, lpstr, sstr, bstr);
     }
   }
 
   free(my_blob);
-  if (all_blobs) free(all_blobs);
+  if (all_blobs)
+    free(all_blobs);
 }
 }

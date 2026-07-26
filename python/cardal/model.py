@@ -20,6 +20,7 @@ import os
 import numpy as np
 
 from . import _core
+from .low_rank import LowRank, SparseLowRank
 from .result import Result, _make_result
 
 
@@ -82,15 +83,12 @@ def _matrix_to_lower_coo(mat, dim: int, label: str):
     return rows[mask], cols[mask], vals[mask]
 
 
-def _linear_matrix_to_coo(
-    mat, num_constraints: int, variable_dim: int, label: str
-):
+def _linear_matrix_to_coo(mat, num_constraints: int, variable_dim: int, label: str):
     if hasattr(mat, "tocoo"):
         coo = mat.tocoo()
         if coo.shape != (num_constraints, variable_dim):
             raise ValueError(
-                f"{label} shape {coo.shape} != "
-                f"({num_constraints}, {variable_dim})"
+                f"{label} shape {coo.shape} != ({num_constraints}, {variable_dim})"
             )
         return (
             np.asarray(coo.row, dtype=np.int32),
@@ -100,8 +98,7 @@ def _linear_matrix_to_coo(
     arr = np.ascontiguousarray(mat, dtype=np.float64)
     if arr.shape != (num_constraints, variable_dim):
         raise ValueError(
-            f"{label} shape {arr.shape} != "
-            f"({num_constraints}, {variable_dim})"
+            f"{label} shape {arr.shape} != ({num_constraints}, {variable_dim})"
         )
     rows, cols = np.nonzero(arr)
     return (
@@ -109,6 +106,30 @@ def _linear_matrix_to_coo(
         cols.astype(np.int32),
         arr[rows, cols].astype(np.float64),
     )
+
+
+def _split_matrix_input(mat, dim: int, label: str):
+    sparse = mat
+    low_rank = None
+    if isinstance(mat, SparseLowRank):
+        sparse = mat.sparse
+        low_rank = mat.low_rank
+    elif isinstance(mat, LowRank):
+        sparse = None
+        low_rank = mat
+
+    if low_rank is not None and low_rank.factors.shape[0] != dim:
+        raise ValueError(
+            f"{label}: low-rank factor has {low_rank.factors.shape[0]} rows, "
+            f"expected {dim}"
+        )
+    if sparse is None:
+        rows = np.empty(0, dtype=np.int32)
+        cols = np.empty(0, dtype=np.int32)
+        vals = np.empty(0, dtype=np.float64)
+    else:
+        rows, cols, vals = _matrix_to_lower_coo(sparse, dim, label)
+    return rows, cols, vals, low_rank
 
 
 class Model:
@@ -169,6 +190,8 @@ class Model:
         b,
         C: Tuple,
         A: Tuple,
+        C_low_rank: Optional[Tuple] = None,
+        A_low_rank: Optional[Tuple] = None,
         lp_dim: int = 0,
         lp_obj=None,
         A_lp: Optional[Tuple] = None,
@@ -194,6 +217,12 @@ class Model:
         A : tuple ``(constr_ind, cone_ind, row_ind, col_ind, val)``
             COO triplets of the constraint matrices. Same triangle rule as
             ``C``.
+        C_low_rank : tuple ``(cone_ind, rank, factors, weights)`` or None
+            Signed low-rank objective terms. Factor matrices are concatenated
+            term by term in column-major order; weights are concatenated in
+            the same order.
+        A_low_rank : tuple ``(constr_ind, cone_ind, rank, factors, weights)``
+            Signed low-rank constraint terms, packed like ``C_low_rank``.
         lp_dim : int
             Dimension of the optional nonnegative LP block. Default 0.
         lp_obj : array-like, length ``lp_dim``, or None
@@ -213,21 +242,49 @@ class Model:
             If any array length is inconsistent with the declared sizes.
         """
         block_dims_arr = np.ascontiguousarray(block_dims, dtype=np.int32)
-        b_arr          = np.ascontiguousarray(b,          dtype=np.float64)
+        b_arr = np.ascontiguousarray(b, dtype=np.float64)
         num_cones = int(block_dims_arr.size)
         num_constraints = int(b_arr.size)
 
         c_cone, c_row, c_col, c_val = _unpack_coo(C, 4, "C")
         a_constr, a_cone, a_row, a_col, a_val = _unpack_coo(A, 5, "A")
+        if C_low_rank is None:
+            c_lr_cone = np.empty(0, dtype=np.int32)
+            c_lr_rank = np.empty(0, dtype=np.int32)
+            c_lr_factors = np.empty(0, dtype=np.float64)
+            c_lr_weights = np.empty(0, dtype=np.float64)
+        else:
+            if len(C_low_rank) != 4:
+                raise ValueError(
+                    "C_low_rank must be (cone_ind, rank, factors, weights)"
+                )
+            c_lr_cone = np.ascontiguousarray(C_low_rank[0], dtype=np.int32)
+            c_lr_rank = np.ascontiguousarray(C_low_rank[1], dtype=np.int32)
+            c_lr_factors = np.ascontiguousarray(C_low_rank[2], dtype=np.float64)
+            c_lr_weights = np.ascontiguousarray(C_low_rank[3], dtype=np.float64)
+        if A_low_rank is None:
+            a_lr_constr = np.empty(0, dtype=np.int32)
+            a_lr_cone = np.empty(0, dtype=np.int32)
+            a_lr_rank = np.empty(0, dtype=np.int32)
+            a_lr_factors = np.empty(0, dtype=np.float64)
+            a_lr_weights = np.empty(0, dtype=np.float64)
+        else:
+            if len(A_low_rank) != 5:
+                raise ValueError(
+                    "A_low_rank must be (constr_ind, cone_ind, rank, factors, weights)"
+                )
+            a_lr_constr = np.ascontiguousarray(A_low_rank[0], dtype=np.int32)
+            a_lr_cone = np.ascontiguousarray(A_low_rank[1], dtype=np.int32)
+            a_lr_rank = np.ascontiguousarray(A_low_rank[2], dtype=np.int32)
+            a_lr_factors = np.ascontiguousarray(A_low_rank[3], dtype=np.float64)
+            a_lr_weights = np.ascontiguousarray(A_low_rank[4], dtype=np.float64)
 
         if lp_dim > 0:
             if lp_obj is None:
                 raise ValueError("lp_obj required when lp_dim > 0")
             lp_obj_arr = np.ascontiguousarray(lp_obj, dtype=np.float64)
             if lp_obj_arr.size != lp_dim:
-                raise ValueError(
-                    f"lp_obj length {lp_obj_arr.size} != lp_dim {lp_dim}"
-                )
+                raise ValueError(f"lp_obj length {lp_obj_arr.size} != lp_dim {lp_dim}")
         else:
             lp_obj_arr = np.empty(0, dtype=np.float64)
 
@@ -235,8 +292,8 @@ class Model:
             lp_constr, lp_col, lp_val = _unpack_coo(A_lp, 3, "A_lp")
         else:
             lp_constr = np.empty(0, dtype=np.int32)
-            lp_col    = np.empty(0, dtype=np.int32)
-            lp_val    = np.empty(0, dtype=np.float64)
+            lp_col = np.empty(0, dtype=np.int32)
+            lp_val = np.empty(0, dtype=np.float64)
 
         if free_dim > 0:
             if free_obj is None:
@@ -250,9 +307,7 @@ class Model:
             free_obj_arr = np.empty(0, dtype=np.float64)
 
         if A_free is not None:
-            free_constr, free_col, free_val = _unpack_coo(
-                A_free, 3, "A_free"
-            )
+            free_constr, free_col, free_val = _unpack_coo(A_free, 3, "A_free")
         else:
             free_constr = np.empty(0, dtype=np.int32)
             free_col = np.empty(0, dtype=np.int32)
@@ -273,6 +328,15 @@ class Model:
             a_row_ind=a_row,
             a_col_ind=a_col,
             a_val=a_val,
+            c_lr_cone_ind=c_lr_cone,
+            c_lr_rank=c_lr_rank,
+            c_lr_factors=c_lr_factors,
+            c_lr_weights=c_lr_weights,
+            a_lr_constr_ind=a_lr_constr,
+            a_lr_cone_ind=a_lr_cone,
+            a_lr_rank=a_lr_rank,
+            a_lr_factors=a_lr_factors,
+            a_lr_weights=a_lr_weights,
             lp_obj=lp_obj_arr,
             lp_constr_ind=lp_constr,
             lp_col_ind=lp_col,
@@ -311,12 +375,13 @@ class Model:
             Right-hand-side vector.
         C : sequence of ``p`` matrices
             Per-block primal cost matrices. Each entry may be a dense
-            ``numpy.ndarray`` or any ``scipy.sparse`` matrix. Assumed
-            symmetric; only the lower triangle (``row >= col``) is stored.
+            ``numpy.ndarray``, any ``scipy.sparse`` matrix,
+            :class:`cardal.LowRank`, or :class:`cardal.SparseLowRank`.
+            Explicit matrix data is assumed symmetric; only the lower
+            triangle (``row >= col``) is stored.
         A : sequence of ``m`` rows of ``p`` matrices, i.e. ``A[i][k]`` is
             the ``k``-th block of the ``i``-th constraint. Each entry may
-            be a dense ndarray, a scipy.sparse matrix, or ``None`` (treated
-            as zero). Assumed symmetric per block.
+            use any form accepted by ``C`` or be ``None`` (treated as zero).
         lp_dim : int
             Dimension of the optional nonnegative LP block. Default 0.
         lp_obj : array-like, length ``lp_dim``, or None
@@ -341,44 +406,57 @@ class Model:
                 f"len(C)={len(C)} does not match len(block_dims)={num_cones}"
             )
         if len(A) != num_constraints:
-            raise ValueError(
-                f"len(A)={len(A)} does not match len(b)={num_constraints}"
-            )
+            raise ValueError(f"len(A)={len(A)} does not match len(b)={num_constraints}")
 
         # Build C-side COO by iterating over blocks.
         c_cone, c_row, c_col, c_val = [], [], [], []
+        c_lr_cone, c_lr_rank, c_lr_factors, c_lr_weights = [], [], [], []
         for k, Ck in enumerate(C):
-            rows, cols, vals = _matrix_to_lower_coo(Ck, block_dims[k], f"C[{k}]")
+            rows, cols, vals, lr = _split_matrix_input(Ck, block_dims[k], f"C[{k}]")
             c_cone.append(np.full(rows.size, k, dtype=np.int32))
-            c_row.append(rows); c_col.append(cols); c_val.append(vals)
+            c_row.append(rows)
+            c_col.append(cols)
+            c_val.append(vals)
+            if lr is not None and lr.rank > 0:
+                c_lr_cone.append(k)
+                c_lr_rank.append(lr.rank)
+                c_lr_factors.append(lr.factors.ravel(order="F"))
+                c_lr_weights.append(lr.weights)
         c_cone = _hstack_ints(c_cone)
-        c_row  = _hstack_ints(c_row)
-        c_col  = _hstack_ints(c_col)
-        c_val  = _hstack_floats(c_val)
+        c_row = _hstack_ints(c_row)
+        c_col = _hstack_ints(c_col)
+        c_val = _hstack_floats(c_val)
 
         # Build A-side COO by iterating over constraints and blocks.
         a_constr, a_cone, a_row, a_col, a_val = [], [], [], [], []
+        a_lr_constr, a_lr_cone, a_lr_rank = [], [], []
+        a_lr_factors, a_lr_weights = [], []
         for i, row in enumerate(A):
             if len(row) != num_cones:
-                raise ValueError(
-                    f"A[{i}] has length {len(row)}, expected {num_cones}"
-                )
+                raise ValueError(f"A[{i}] has length {len(row)}, expected {num_cones}")
             for k, Aik in enumerate(row):
                 if Aik is None:
                     continue
-                rows, cols, vals = _matrix_to_lower_coo(
+                rows, cols, vals, lr = _split_matrix_input(
                     Aik, block_dims[k], f"A[{i}][{k}]"
                 )
-                if rows.size == 0:
-                    continue
-                a_constr.append(np.full(rows.size, i, dtype=np.int32))
-                a_cone.append(np.full(rows.size, k, dtype=np.int32))
-                a_row.append(rows); a_col.append(cols); a_val.append(vals)
+                if rows.size > 0:
+                    a_constr.append(np.full(rows.size, i, dtype=np.int32))
+                    a_cone.append(np.full(rows.size, k, dtype=np.int32))
+                    a_row.append(rows)
+                    a_col.append(cols)
+                    a_val.append(vals)
+                if lr is not None and lr.rank > 0:
+                    a_lr_constr.append(i)
+                    a_lr_cone.append(k)
+                    a_lr_rank.append(lr.rank)
+                    a_lr_factors.append(lr.factors.ravel(order="F"))
+                    a_lr_weights.append(lr.weights)
         a_constr = _hstack_ints(a_constr)
-        a_cone   = _hstack_ints(a_cone)
-        a_row    = _hstack_ints(a_row)
-        a_col    = _hstack_ints(a_col)
-        a_val    = _hstack_floats(a_val)
+        a_cone = _hstack_ints(a_cone)
+        a_row = _hstack_ints(a_row)
+        a_col = _hstack_ints(a_col)
+        a_val = _hstack_floats(a_val)
 
         # LP.
         A_lp_coo = None
@@ -399,6 +477,19 @@ class Model:
             b=b_arr,
             C=(c_cone, c_row, c_col, c_val),
             A=(a_constr, a_cone, a_row, a_col, a_val),
+            C_low_rank=(
+                np.asarray(c_lr_cone, dtype=np.int32),
+                np.asarray(c_lr_rank, dtype=np.int32),
+                _hstack_floats(c_lr_factors),
+                _hstack_floats(c_lr_weights),
+            ),
+            A_low_rank=(
+                np.asarray(a_lr_constr, dtype=np.int32),
+                np.asarray(a_lr_cone, dtype=np.int32),
+                np.asarray(a_lr_rank, dtype=np.int32),
+                _hstack_floats(a_lr_factors),
+                _hstack_floats(a_lr_weights),
+            ),
             lp_dim=lp_dim,
             lp_obj=lp_obj,
             A_lp=A_lp_coo,

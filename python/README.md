@@ -94,7 +94,11 @@ file with the CLI first and read it back.
 
 ### From NumPy arrays
 
-`Model.set_problem()` accepts a list of dense `numpy` or `scipy.sparse` matrices per PSD block. As a worked example, the smallest-eigenvalue SDP for a symmetric matrix $H$ &mdash; $\min\langle H, X\rangle$ subject to $\mathrm{tr}(X)=1$, $X\succeq 0$ &mdash; whose optimum equals $\lambda_{\min}(H)$:
+`Model.set_problem()` accepts dense NumPy, SciPy sparse, signed low-rank, and
+sparse-plus-low-rank matrices per PSD block. As a worked example, the
+smallest-eigenvalue SDP for a symmetric matrix $H$ &mdash;
+$\min\langle H, X\rangle$ subject to $\mathrm{tr}(X)=1$, $X\succeq 0$
+&mdash; has optimum $\lambda_{\min}(H)$:
 
 ```python
 import numpy as np
@@ -117,7 +121,29 @@ print(m.num_cones, m.num_constraints, m.num_variables,
       m.block_dims, m.lp_dim, m.free_dim)
 ```
 
-Matrices may be dense (`numpy.ndarray`) or any `scipy.sparse` matrix (CSR, CSC, and COO are all accepted). Each is assumed symmetric, and **only the lower triangle is read**: entries with `row < col` are ignored, and off-diagonals are **not** implicitly doubled. `A[i][k]` may be `None` to mean "constraint *i* touches nothing in cone *k*".
+Explicit matrices may be dense (`numpy.ndarray`) or any `scipy.sparse` matrix
+(CSR, CSC, and COO are all accepted). Each is assumed symmetric, and **only
+the lower triangle is read**: entries with `row < col` are ignored, and
+off-diagonals are **not** implicitly doubled. `A[i][k]` may be `None` to mean
+"constraint *i* touches nothing in cone *k*".
+
+Signed low-rank data stays factored:
+
+```python
+u = np.array([[1.0], [2.0], [-1.0]])
+
+m.set_problem(
+    block_dims=[3],
+    C=[cardal.LowRank(u, weights=[-1.0])],
+    A=[[cardal.LowRank(np.eye(3))]],
+    b=[1.0],
+)
+```
+
+`LowRank(U, weights=d)` represents $U\mathrm{diag}(d)U^\top$.
+`SparseLowRank(S, U, weights=d)` adds an explicit sparse or dense component
+$S$. Signed weights are allowed. A small symmetric `core=D` may be supplied
+instead of diagonal weights; it is diagonalized once during construction.
 
 ### From `scipy.sparse`
 
@@ -224,8 +250,8 @@ supported.
 | `cardal.Model()`                  | Construct an empty model. Reusable across problems.                                                        |
 | `Model.read_file(path)`           | Construct and return a model from an auto-detected SDPA/MATLAB/PDSDP file. Raises `FileNotFoundError` if the path is missing and `ValueError` on parse failure. |
 | `m.load_file(path)`               | Replace an existing model's problem from a supported file.                                                 |
-| `m.set_problem(**kwargs)`         | Build from lists of dense `numpy` or `scipy.sparse` matrices per block.                                    |
-| `m.set_problem_coo(**kwargs)`     | Low-level entry: build from raw COO triplet arrays (5 arrays for the constraints, 4 for the objective, plus `b`). |
+| `m.set_problem(**kwargs)`         | Build from dense, SciPy sparse, `LowRank`, or `SparseLowRank` matrices per block.                           |
+| `m.set_problem_coo(**kwargs)`     | Low-level entry: build from raw COO arrays and optional packed signed low-rank terms.                       |
 | `m.solve(**params)`               | Solve the loaded problem. Returns a frozen `cardal.Result`. Raises `RuntimeError` if no problem was loaded and `TypeError` on unknown kwargs. |
 | `Model.default_params()`          | `@classmethod` returning a fresh, mutable dict of every recognized parameter and its default.              |
 

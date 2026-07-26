@@ -7,6 +7,18 @@ The format follows [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Added signed low-rank objective and constraint matrices, including hybrid
+  sparse-plus-low-rank data, across the GPU solver, scaling, rank
+  augmentation, multi-GPU execution, public C API, and Python API.
+- Added Python `LowRank` and `SparseLowRank` matrix inputs with support for
+  diagonal weights or a small symmetric core matrix.
+- Added native parsing of SDPT3 low-rank constraints stored in `blk{j,3}` and
+  `At{j,2:3}`.
+- Added batched GPU kernels for signed low-rank operations on groups of small
+  PSD cones, including cones with different adaptive ranks.
+
 ## [0.1.1] - 2026-07-25
 
 ### Added

@@ -41,6 +41,17 @@ reader likewise imports blocks tagged `u`. These variables remain
 unrestricted internally and are not converted into pairs of nonnegative
 variables.
 
+For a single SDPT3 PSD block, CARDAL also reads the native low-rank constraint
+encoding:
+
+- `blk{j,3}` contains the ranks of the low-rank constraint matrices.
+- `At{j,2}` concatenates their factor matrices \(V_k\).
+- `At{j,3}` stores either the concatenated diagonals of \(D_k\) or SDPT3's
+  four-column `(term, row, column, value)` representation.
+
+Each imported matrix is applied as \(V_kD_kV_k^\top\) without dense
+materialization.
+
 Configure a native build with MAT support:
 
 ```bash
@@ -70,8 +81,10 @@ required.
 
 Python and C callers do not need to serialize a file:
 
-- Python `Model.set_problem` accepts dense NumPy and SciPy sparse blocks.
-- Python `Model.set_problem_coo` accepts parallel COO arrays.
+- Python `Model.set_problem` accepts dense NumPy, SciPy sparse, signed
+  low-rank, and sparse-plus-low-rank blocks.
+- Python `Model.set_problem_coo` accepts parallel COO arrays and packed
+  low-rank terms.
 - C `cardal_build_problem` accepts `cardal_problem_data`.
 
 Both in-memory APIs natively accept nonnegative LP and unrestricted real

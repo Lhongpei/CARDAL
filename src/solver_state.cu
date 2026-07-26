@@ -3,6 +3,7 @@
  */
 
 #include "internal_types.h"
+#include "low_rank_op.h"
 #include "sdp_op.h"
 #include "solver_state.h"
 #include "utils.h"
@@ -85,6 +86,23 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
       norm_C_inf = fmax(fabs(val), norm_C_inf);
     }
   }
+  if (sdp_problem->low_rank_data != NULL) {
+    const symmetric_low_rank_data_t *lr = sdp_problem->low_rank_data;
+    for (int j = 0; j < lr->num_columns; j++) {
+      if (lr->constraint_ind[j] >= 0)
+        continue;
+      int dim = sdp_problem->blk_dims[lr->cone_ind[j]];
+      const double *u = lr->factor_values + lr->factor_ptr[j];
+      double norm_sq = 0.0, umax = 0.0;
+      for (int r = 0; r < dim; r++) {
+        norm_sq += u[r] * u[r];
+        if (fabs(u[r]) > umax)
+          umax = fabs(u[r]);
+      }
+      norm_C_sq += fabs(lr->weights[j]) * norm_sq;
+      norm_C_inf = fmax(norm_C_inf, fabs(lr->weights[j]) * umax * umax);
+    }
+  }
 
   if (sdp_problem->lp_dim > 0 && sdp_problem->lp_objective_vector != NULL) {
     for (int i = 0; i < sdp_problem->lp_dim; i++) {
@@ -94,8 +112,7 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
     }
   }
 
-  if (sdp_problem->free_dim > 0 &&
-      sdp_problem->free_objective_vector != NULL) {
+  if (sdp_problem->free_dim > 0 && sdp_problem->free_objective_vector != NULL) {
     for (int i = 0; i < sdp_problem->free_dim; i++) {
       double val = sdp_problem->free_objective_vector[i];
       norm_C_sq += fabs(val);
@@ -157,9 +174,8 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
   state->consecutive_gate_pass = 0;
   state->force_augment_this_iter = 0;
   state->inner_iterations_limit = params->inner_iterations_limit;
-  state->lbfgs_history_size = (params->lbfgs_history_size > 0)
-                                  ? params->lbfgs_history_size
-                                  : 5;
+  state->lbfgs_history_size =
+      (params->lbfgs_history_size > 0) ? params->lbfgs_history_size : 5;
   state->penalty_factor = params->penalty_factor;
   state->augmentation_mode = params->augmentation_mode;
 
@@ -355,8 +371,8 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
       CUDA_R_64F, CUSPARSE_SPMV_CSR_ALG2, state->dual_spmv_buffer));
 
   // Initialize the per-state CUDA stream pool shared by all cones.
-  state->cone_stream_pool_size =
-      (int)(sizeof(state->cone_stream_pool) / sizeof(state->cone_stream_pool[0]));
+  state->cone_stream_pool_size = (int)(sizeof(state->cone_stream_pool) /
+                                       sizeof(state->cone_stream_pool[0]));
   for (int i = 0; i < state->cone_stream_pool_size; i++) {
     CUDA_CHECK(cudaStreamCreateWithFlags(&state->cone_stream_pool[i],
                                          cudaStreamNonBlocking));
@@ -416,7 +432,7 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
 
     blk_state->dim = n_k;
     blk_state->rank = rank;
-    
+
     // Alias into the state-level pool; never destroyed per-cone.
     blk_state->stream =
         state->cone_stream_pool[b % state->cone_stream_pool_size];
@@ -606,7 +622,7 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
             ? rescale_info->psd_cone_rescaling + psd_scale_offset
             : NULL;
     populate_block_psd_cone_rescaling(blk_state, n_k, nnz_Union, h_row_ptr_U,
-                                       h_col_ind_U, cone_d);
+                                      h_col_ind_U, cone_d);
 
     if (coo_A)
       free(coo_A);
@@ -719,6 +735,8 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
 
   populate_state_scaling_fields(state, rescale_info);
 
+  initialize_low_rank_blocks(state, sdp_problem);
+
   build_cone_batches(state);
 
   return state;
@@ -726,8 +744,7 @@ initialize_solver_state(const compressed_sdp_problem_t *sdp_problem,
 
 static void build_one_cone_batch(cardal_sdp_solver_state_t *state,
                                  block_low_rank_state_t *b, int *blk_indices,
-                                 int n_cones, int dim,
-                                 cone_batch_kind_t kind) {
+                                 int n_cones, int dim, cone_batch_kind_t kind) {
   // NOTE: do NOT memset(b) here. Per-cone init has already populated the
   // scalar fields on this entry; we only touch identity + bdata.
   b->dim = dim;
@@ -783,12 +800,12 @@ static void build_one_cone_batch(cardal_sdp_solver_state_t *state,
   CUDA_CHECK(cudaMalloc(&bd->d_D_offsets, n_cones * sizeof(long long)));
   CUDA_CHECK(cudaMemcpy(bd->d_ranks, h_ranks, n_cones * sizeof(int),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(bd->d_R_offsets, h_R_off,
-                        n_cones * sizeof(long long), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(bd->d_G_offsets, h_G_off,
-                        n_cones * sizeof(long long), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(bd->d_D_offsets, h_D_off,
-                        n_cones * sizeof(long long), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(bd->d_R_offsets, h_R_off, n_cones * sizeof(long long),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(bd->d_G_offsets, h_G_off, n_cones * sizeof(long long),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(bd->d_D_offsets, h_D_off, n_cones * sizeof(long long),
+                        cudaMemcpyHostToDevice));
   free(h_ranks);
   free(h_R_off);
   free(h_G_off);
@@ -837,7 +854,7 @@ static void build_one_cone_batch(cardal_sdp_solver_state_t *state,
     int dim = blk->dim;
 
     int cone_S_start_for_A = write_S; // S offset for this cone (consistent
-                                       // with the parallel loop below)
+                                      // with the parallel loop below)
     if (blk->constraint_sparse_pattern != NULL) {
       sparse_csr_matrix_t *A = blk->constraint_sparse_pattern;
       int nnz = A->num_nonzeros;
@@ -846,12 +863,12 @@ static void build_one_cone_batch(cardal_sdp_solver_state_t *state,
         int *h_col_ind = (int *)safe_malloc(nnz * sizeof(int));
         int *h_compat = (int *)safe_malloc(nnz * sizeof(int));
         int *h_c2u = (int *)safe_malloc(nnz * sizeof(int));
-        CUDA_CHECK(cudaMemcpy(h_row_ptr, A->row_ptr,
-                              (dim + 1) * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_row_ptr, A->row_ptr, (dim + 1) * sizeof(int),
+                              cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(h_col_ind, A->col_ind, nnz * sizeof(int),
                               cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(h_compat, blk->compat_mapping,
-                              nnz * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_compat, blk->compat_mapping, nnz * sizeof(int),
+                              cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(h_c2u, blk->constraint_to_union_mapping,
                               nnz * sizeof(int), cudaMemcpyDeviceToHost));
         int within_cone_A_idx = 0;
@@ -883,13 +900,12 @@ static void build_one_cone_batch(cardal_sdp_solver_state_t *state,
         int *h_row_ptr = (int *)safe_malloc((dim + 1) * sizeof(int));
         int *h_col_ind = (int *)safe_malloc(nnz * sizeof(int));
         double *h_objval = (double *)safe_malloc(nnz * sizeof(double));
-        CUDA_CHECK(cudaMemcpy(h_row_ptr, S->row_ptr,
-                              (dim + 1) * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_row_ptr, S->row_ptr, (dim + 1) * sizeof(int),
+                              cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(h_col_ind, S->col_ind, nnz * sizeof(int),
                               cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(h_objval, blk->objective_val,
-                              nnz * sizeof(double),
-                              cudaMemcpyDeviceToHost));
+                              nnz * sizeof(double), cudaMemcpyDeviceToHost));
         for (int r = 0; r <= dim; r++)
           h_S_row_ptr_flat[h_S_row_ptr_off[s] + r] = h_row_ptr[r];
         for (int i = 0; i < dim; i++) {
@@ -957,13 +973,12 @@ static void build_one_cone_batch(cardal_sdp_solver_state_t *state,
   CUDA_CHECK(cudaMemcpy(bd->d_cone_S_offsets, h_cone_S_off,
                         (n_small + 1) * sizeof(int), cudaMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMalloc(&bd->d_S_row_ptr_flat,
-                        total_row_ptr_len * sizeof(int)));
+  CUDA_CHECK(
+      cudaMalloc(&bd->d_S_row_ptr_flat, total_row_ptr_len * sizeof(int)));
   CUDA_CHECK(cudaMemcpy(bd->d_S_row_ptr_flat, h_S_row_ptr_flat,
                         total_row_ptr_len * sizeof(int),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(
-      cudaMalloc(&bd->d_S_row_ptr_offsets, (n_small + 1) * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&bd->d_S_row_ptr_offsets, (n_small + 1) * sizeof(int)));
   CUDA_CHECK(cudaMemcpy(bd->d_S_row_ptr_offsets, h_S_row_ptr_off,
                         (n_small + 1) * sizeof(int), cudaMemcpyHostToDevice));
   free(h_S_row_ptr_flat);
@@ -981,11 +996,13 @@ static void build_one_cone_batch(cardal_sdp_solver_state_t *state,
       double *new_val = bd->d_flat_spS_val + h_cone_S_off[s];
       CUDA_CHECK(cudaFree(S->val));
       S->val = new_val;
-      CUSPARSE_CHECK(cusparseCsrSetPointers(blk->matSpS, S->row_ptr,
-                                            S->col_ind, S->val));
+      CUSPARSE_CHECK(
+          cusparseCsrSetPointers(blk->matSpS, S->row_ptr, S->col_ind, S->val));
     }
   }
   free(h_cone_S_off);
+
+  initialize_batched_low_rank(state, b);
 }
 
 // Bucket cones by dim; small cones go to CUSTOM batches, larger to PERCONE.
@@ -1126,8 +1143,7 @@ void refresh_cone_batches(cardal_sdp_solver_state_t *state) {
   }
 }
 
-void augment_system_rank(cardal_sdp_solver_state_t *state,
-                         const int *rank_incs,
+void augment_system_rank(cardal_sdp_solver_state_t *state, const int *rank_incs,
                          double *const *new_columns) {
   int new_total_len = 0;
 
@@ -1309,10 +1325,10 @@ void augment_system_rank(cardal_sdp_solver_state_t *state,
     state->lp_solution_offset = new_lp_solution_offset;
   }
   if (state->free_dim > 0) {
-    CUDA_CHECK(cudaMemcpy(
-        new_global_R + new_free_solution_offset,
-        state->low_rank_solution + state->free_solution_offset,
-        state->free_dim * sizeof(double), cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(
+        cudaMemcpy(new_global_R + new_free_solution_offset,
+                   state->low_rank_solution + state->free_solution_offset,
+                   state->free_dim * sizeof(double), cudaMemcpyDeviceToDevice));
     state->free_solution_offset = new_free_solution_offset;
   }
 
@@ -1357,7 +1373,7 @@ void augment_system_rank(cardal_sdp_solver_state_t *state,
 
 sdp_result_t *
 create_result_from_state(cardal_sdp_solver_state_t *state,
-                      const compressed_sdp_problem_t *sdp_problem) {
+                         const compressed_sdp_problem_t *sdp_problem) {
   sdp_result_t *result = (sdp_result_t *)calloc(1, sizeof(sdp_result_t));
   result->num_variables = sdp_problem->n_active_vars;
   result->num_constraints = sdp_problem->num_constraints;
@@ -1371,8 +1387,7 @@ create_result_from_state(cardal_sdp_solver_state_t *state,
                         state->length_low_rank_solution * sizeof(double),
                         cudaMemcpyDeviceToHost));
   for (int i = 0; i < state->lp_dim; i++) {
-    double v =
-        result->low_rank_primal_solution[state->lp_solution_offset + i];
+    double v = result->low_rank_primal_solution[state->lp_solution_offset + i];
     result->low_rank_primal_solution[state->lp_solution_offset + i] = v * v;
   }
   result->low_rank_solution_length = state->length_low_rank_solution;
@@ -1383,8 +1398,7 @@ create_result_from_state(cardal_sdp_solver_state_t *state,
   result->free_solution_offset = state->free_solution_offset;
   result->n_cones = state->n_blks;
   result->rank_list = (int *)safe_malloc(state->n_blks * sizeof(int));
-  safe_memcpy(result->rank_list, state->rank_list,
-              state->n_blks * sizeof(int));
+  safe_memcpy(result->rank_list, state->rank_list, state->n_blks * sizeof(int));
 
   result->dual_solution =
       (double *)safe_malloc(state->num_constraints * sizeof(double));
@@ -1416,9 +1430,12 @@ create_result_from_state(cardal_sdp_solver_state_t *state,
 static void free_sparse_csr(sparse_csr_matrix_t *csr) {
   if (csr == NULL)
     return;
-  if (csr->row_ptr) CUDA_CHECK(cudaFree(csr->row_ptr));
-  if (csr->col_ind) CUDA_CHECK(cudaFree(csr->col_ind));
-  if (csr->val)     CUDA_CHECK(cudaFree(csr->val));
+  if (csr->row_ptr)
+    CUDA_CHECK(cudaFree(csr->row_ptr));
+  if (csr->col_ind)
+    CUDA_CHECK(cudaFree(csr->col_ind));
+  if (csr->val)
+    CUDA_CHECK(cudaFree(csr->val));
   free(csr);
 }
 
@@ -1427,25 +1444,54 @@ static void free_sparse_csr(sparse_csr_matrix_t *csr) {
 // (set to NULL) by the caller BEFORE calling this so that per-block
 // teardown does not double-free d_flat_spS_val.
 static void free_bdata(cone_batch_data_t *bd) {
-  if (bd == NULL) return;
-  if (bd->d_blk_idx)           CUDA_CHECK(cudaFree(bd->d_blk_idx));
-  if (bd->d_ranks)             CUDA_CHECK(cudaFree(bd->d_ranks));
-  if (bd->d_R_offsets)         CUDA_CHECK(cudaFree(bd->d_R_offsets));
-  if (bd->d_G_offsets)         CUDA_CHECK(cudaFree(bd->d_G_offsets));
-  if (bd->d_D_offsets)         CUDA_CHECK(cudaFree(bd->d_D_offsets));
-  if (bd->d_entry_cone_A)      CUDA_CHECK(cudaFree(bd->d_entry_cone_A));
-  if (bd->d_entry_row_A)       CUDA_CHECK(cudaFree(bd->d_entry_row_A));
-  if (bd->d_entry_col_A)       CUDA_CHECK(cudaFree(bd->d_entry_col_A));
-  if (bd->d_entry_compat_A)    CUDA_CHECK(cudaFree(bd->d_entry_compat_A));
-  if (bd->d_entry_A_to_flatS)  CUDA_CHECK(cudaFree(bd->d_entry_A_to_flatS));
-  if (bd->d_entry_cone_S)      CUDA_CHECK(cudaFree(bd->d_entry_cone_S));
-  if (bd->d_entry_row_S)       CUDA_CHECK(cudaFree(bd->d_entry_row_S));
-  if (bd->d_entry_col_S)       CUDA_CHECK(cudaFree(bd->d_entry_col_S));
-  if (bd->d_cone_S_offsets)    CUDA_CHECK(cudaFree(bd->d_cone_S_offsets));
-  if (bd->d_flat_objval_S)     CUDA_CHECK(cudaFree(bd->d_flat_objval_S));
-  if (bd->d_flat_spS_val)      CUDA_CHECK(cudaFree(bd->d_flat_spS_val));
-  if (bd->d_S_row_ptr_flat)    CUDA_CHECK(cudaFree(bd->d_S_row_ptr_flat));
-  if (bd->d_S_row_ptr_offsets) CUDA_CHECK(cudaFree(bd->d_S_row_ptr_offsets));
+  if (bd == NULL)
+    return;
+  if (bd->d_blk_idx)
+    CUDA_CHECK(cudaFree(bd->d_blk_idx));
+  if (bd->d_ranks)
+    CUDA_CHECK(cudaFree(bd->d_ranks));
+  if (bd->d_R_offsets)
+    CUDA_CHECK(cudaFree(bd->d_R_offsets));
+  if (bd->d_G_offsets)
+    CUDA_CHECK(cudaFree(bd->d_G_offsets));
+  if (bd->d_D_offsets)
+    CUDA_CHECK(cudaFree(bd->d_D_offsets));
+  if (bd->d_entry_cone_A)
+    CUDA_CHECK(cudaFree(bd->d_entry_cone_A));
+  if (bd->d_entry_row_A)
+    CUDA_CHECK(cudaFree(bd->d_entry_row_A));
+  if (bd->d_entry_col_A)
+    CUDA_CHECK(cudaFree(bd->d_entry_col_A));
+  if (bd->d_entry_compat_A)
+    CUDA_CHECK(cudaFree(bd->d_entry_compat_A));
+  if (bd->d_entry_A_to_flatS)
+    CUDA_CHECK(cudaFree(bd->d_entry_A_to_flatS));
+  if (bd->d_entry_cone_S)
+    CUDA_CHECK(cudaFree(bd->d_entry_cone_S));
+  if (bd->d_entry_row_S)
+    CUDA_CHECK(cudaFree(bd->d_entry_row_S));
+  if (bd->d_entry_col_S)
+    CUDA_CHECK(cudaFree(bd->d_entry_col_S));
+  if (bd->d_cone_S_offsets)
+    CUDA_CHECK(cudaFree(bd->d_cone_S_offsets));
+  if (bd->d_flat_objval_S)
+    CUDA_CHECK(cudaFree(bd->d_flat_objval_S));
+  if (bd->d_flat_spS_val)
+    CUDA_CHECK(cudaFree(bd->d_flat_spS_val));
+  if (bd->d_S_row_ptr_flat)
+    CUDA_CHECK(cudaFree(bd->d_S_row_ptr_flat));
+  if (bd->d_S_row_ptr_offsets)
+    CUDA_CHECK(cudaFree(bd->d_S_row_ptr_offsets));
+  if (bd->d_lr_cone_offsets)
+    CUDA_CHECK(cudaFree(bd->d_lr_cone_offsets));
+  if (bd->d_lr_column_cone)
+    CUDA_CHECK(cudaFree(bd->d_lr_column_cone));
+  if (bd->d_lr_constraints)
+    CUDA_CHECK(cudaFree(bd->d_lr_constraints));
+  if (bd->d_lr_weights)
+    CUDA_CHECK(cudaFree(bd->d_lr_weights));
+  if (bd->d_lr_factors)
+    CUDA_CHECK(cudaFree(bd->d_lr_factors));
   free(bd->blk_idx_h);
   free(bd);
 }
@@ -1468,7 +1514,8 @@ void free_solver_state(cardal_sdp_solver_state_t *state) {
       cone_batch_data_t *bd = leader->bdata;
       for (int c = 0; c < leader->n_cones; c++) {
         int idx = bd->blk_idx_h ? bd->blk_idx_h[c] : -1;
-        if (idx < 0 || idx >= state->n_blks) continue;
+        if (idx < 0 || idx >= state->n_blks)
+          continue;
         block_low_rank_state_t *mem = state->block_low_rank_state[idx];
         if (mem && mem->objective_union_constraint_sparse_pattern)
           mem->objective_union_constraint_sparse_pattern->val = NULL;
@@ -1480,98 +1527,159 @@ void free_solver_state(cardal_sdp_solver_state_t *state) {
   if (state->block_low_rank_state != NULL) {
     for (int b = 0; b < state->n_blks; b++) {
       block_low_rank_state_t *blk = state->block_low_rank_state[b];
-      if (blk == NULL) continue;
+      if (blk == NULL)
+        continue;
 
       // cuSPARSE descriptors (aliased into global R/G/D — descriptors only)
-      if (blk->matR)    cusparseDestroyDnMat(blk->matR);
-      if (blk->matGrad) cusparseDestroyDnMat(blk->matGrad);
-      if (blk->matD)    cusparseDestroyDnMat(blk->matD);
-      if (blk->matSpA)  cusparseDestroySpMat(blk->matSpA);
-      if (blk->matSpC)  cusparseDestroySpMat(blk->matSpC);
-      if (blk->matSpS)  cusparseDestroySpMat(blk->matSpS);
+      if (blk->matR)
+        cusparseDestroyDnMat(blk->matR);
+      if (blk->matGrad)
+        cusparseDestroyDnMat(blk->matGrad);
+      if (blk->matD)
+        cusparseDestroyDnMat(blk->matD);
+      if (blk->matSpA)
+        cusparseDestroySpMat(blk->matSpA);
+      if (blk->matSpC)
+        cusparseDestroySpMat(blk->matSpC);
+      if (blk->matSpS)
+        cusparseDestroySpMat(blk->matSpS);
 
       // Sparse patterns (union .val may have been NULL'd in Phase 0)
       free_sparse_csr(blk->constraint_sparse_pattern);
       free_sparse_csr(blk->objective_union_constraint_sparse_pattern);
 
       // Per-block device arrays
-      if (blk->objective_val)                CUDA_CHECK(cudaFree(blk->objective_val));
-      if (blk->compat_mapping)               CUDA_CHECK(cudaFree(blk->compat_mapping));
-      if (blk->constraint_to_union_mapping)  CUDA_CHECK(cudaFree(blk->constraint_to_union_mapping));
-      if (blk->psd_cone_rescaling)           CUDA_CHECK(cudaFree(blk->psd_cone_rescaling));
-      if (blk->vec_psd_cone_rescaling)       CUDA_CHECK(cudaFree(blk->vec_psd_cone_rescaling));
+      if (blk->objective_val)
+        CUDA_CHECK(cudaFree(blk->objective_val));
+      if (blk->compat_mapping)
+        CUDA_CHECK(cudaFree(blk->compat_mapping));
+      if (blk->constraint_to_union_mapping)
+        CUDA_CHECK(cudaFree(blk->constraint_to_union_mapping));
+      if (blk->psd_cone_rescaling)
+        CUDA_CHECK(cudaFree(blk->psd_cone_rescaling));
+      if (blk->vec_psd_cone_rescaling)
+        CUDA_CHECK(cudaFree(blk->vec_psd_cone_rescaling));
 
       // cuSPARSE workspace buffers
-      if (blk->sddmm_buffer_A) CUDA_CHECK(cudaFree(blk->sddmm_buffer_A));
-      if (blk->sddmm_buffer_C) CUDA_CHECK(cudaFree(blk->sddmm_buffer_C));
-      if (blk->spmm_buffer_S)  CUDA_CHECK(cudaFree(blk->spmm_buffer_S));
+      if (blk->sddmm_buffer_A)
+        CUDA_CHECK(cudaFree(blk->sddmm_buffer_A));
+      if (blk->sddmm_buffer_C)
+        CUDA_CHECK(cudaFree(blk->sddmm_buffer_C));
+      if (blk->spmm_buffer_S)
+        CUDA_CHECK(cudaFree(blk->spmm_buffer_S));
 
       // Batched-cone auxiliary data (owned by the batch leader).
       // Member cones share the pooled buffers via aliases which were
       // detached in Phase 0, so this final free reclaims them cleanly.
       free_bdata(blk->bdata);
+      free_low_rank_block(blk->lr_data);
 
       free(blk);
     }
     free(state->block_low_rank_state);
     state->block_low_rank_state = NULL;
   }
-  if (state->batch_leaders) free(state->batch_leaders);
+  if (state->batch_leaders)
+    free(state->batch_leaders);
 
   // ---- State-level GPU arrays ----
-  if (state->low_rank_solution)  CUDA_CHECK(cudaFree(state->low_rank_solution));
-  if (state->low_rank_gradient)  CUDA_CHECK(cudaFree(state->low_rank_gradient));
-  if (state->low_rank_direction) CUDA_CHECK(cudaFree(state->low_rank_direction));
+  if (state->low_rank_solution)
+    CUDA_CHECK(cudaFree(state->low_rank_solution));
+  if (state->low_rank_gradient)
+    CUDA_CHECK(cudaFree(state->low_rank_gradient));
+  if (state->low_rank_direction)
+    CUDA_CHECK(cudaFree(state->low_rank_direction));
 
-  if (state->primal_solution)              CUDA_CHECK(cudaFree(state->primal_solution));
-  if (state->primal_direct_solution_cross) CUDA_CHECK(cudaFree(state->primal_direct_solution_cross));
-  if (state->primal_direct_double)         CUDA_CHECK(cudaFree(state->primal_direct_double));
-  if (state->dual_solution)                CUDA_CHECK(cudaFree(state->dual_solution));
-  if (state->primal_product)               CUDA_CHECK(cudaFree(state->primal_product));
-  if (state->dual_product)                 CUDA_CHECK(cudaFree(state->dual_product));
+  if (state->primal_solution)
+    CUDA_CHECK(cudaFree(state->primal_solution));
+  if (state->primal_direct_solution_cross)
+    CUDA_CHECK(cudaFree(state->primal_direct_solution_cross));
+  if (state->primal_direct_double)
+    CUDA_CHECK(cudaFree(state->primal_direct_double));
+  if (state->dual_solution)
+    CUDA_CHECK(cudaFree(state->dual_solution));
+  if (state->primal_product)
+    CUDA_CHECK(cudaFree(state->primal_product));
+  if (state->dual_product)
+    CUDA_CHECK(cudaFree(state->dual_product));
 
-  if (state->q0)              CUDA_CHECK(cudaFree(state->q0));
-  if (state->q1)              CUDA_CHECK(cudaFree(state->q1));
-  if (state->q2)              CUDA_CHECK(cudaFree(state->q2));
-  if (state->q0_unscaled_buf) CUDA_CHECK(cudaFree(state->q0_unscaled_buf));
+  if (state->q0)
+    CUDA_CHECK(cudaFree(state->q0));
+  if (state->q1)
+    CUDA_CHECK(cudaFree(state->q1));
+  if (state->q2)
+    CUDA_CHECK(cudaFree(state->q2));
+  if (state->q0_unscaled_buf)
+    CUDA_CHECK(cudaFree(state->q0_unscaled_buf));
 
-  if (state->constraint_rescaling)  CUDA_CHECK(cudaFree(state->constraint_rescaling));
-  if (state->lp_variable_rescaling) CUDA_CHECK(cudaFree(state->lp_variable_rescaling));
-  if (state->free_variable_rescaling) CUDA_CHECK(cudaFree(state->free_variable_rescaling));
+  if (state->constraint_rescaling)
+    CUDA_CHECK(cudaFree(state->constraint_rescaling));
+  if (state->lp_variable_rescaling)
+    CUDA_CHECK(cudaFree(state->lp_variable_rescaling));
+  if (state->free_variable_rescaling)
+    CUDA_CHECK(cudaFree(state->free_variable_rescaling));
 
-  if (state->lp_objective_vector) CUDA_CHECK(cudaFree(state->lp_objective_vector));
-  if (state->lp_slack_buffer)     CUDA_CHECK(cudaFree(state->lp_slack_buffer));
-  if (state->lp_min_slack_buf)    CUDA_CHECK(cudaFree(state->lp_min_slack_buf));
-  if (state->free_objective_vector) CUDA_CHECK(cudaFree(state->free_objective_vector));
-  if (state->free_stationarity_buffer) CUDA_CHECK(cudaFree(state->free_stationarity_buffer));
+  if (state->lp_objective_vector)
+    CUDA_CHECK(cudaFree(state->lp_objective_vector));
+  if (state->lp_slack_buffer)
+    CUDA_CHECK(cudaFree(state->lp_slack_buffer));
+  if (state->lp_min_slack_buf)
+    CUDA_CHECK(cudaFree(state->lp_min_slack_buf));
+  if (state->free_objective_vector)
+    CUDA_CHECK(cudaFree(state->free_objective_vector));
+  if (state->free_stationarity_buffer)
+    CUDA_CHECK(cudaFree(state->free_stationarity_buffer));
 
-  if (state->primal_spmv_buffer) CUDA_CHECK(cudaFree(state->primal_spmv_buffer));
-  if (state->dual_spmv_buffer)   CUDA_CHECK(cudaFree(state->dual_spmv_buffer));
+  if (state->primal_spmv_buffer)
+    CUDA_CHECK(cudaFree(state->primal_spmv_buffer));
+  if (state->dual_spmv_buffer)
+    CUDA_CHECK(cudaFree(state->dual_spmv_buffer));
 
-  if (state->d_p2_per_cone) CUDA_CHECK(cudaFree(state->d_p2_per_cone));
-  if (state->d_step_scalars) CUDA_CHECK(cudaFree(state->d_step_scalars));
+  if (state->d_p2_per_cone)
+    CUDA_CHECK(cudaFree(state->d_p2_per_cone));
+  if (state->d_step_scalars)
+    CUDA_CHECK(cudaFree(state->d_step_scalars));
 
-  if (state->d_lbfgs_S)       CUDA_CHECK(cudaFree(state->d_lbfgs_S));
-  if (state->d_lbfgs_Y)       CUDA_CHECK(cudaFree(state->d_lbfgs_Y));
-  if (state->d_lbfgs_R_old)   CUDA_CHECK(cudaFree(state->d_lbfgs_R_old));
-  if (state->d_lbfgs_Grad_old)CUDA_CHECK(cudaFree(state->d_lbfgs_Grad_old));
-  if (state->d_lbfgs_s)       CUDA_CHECK(cudaFree(state->d_lbfgs_s));
-  if (state->d_lbfgs_y)       CUDA_CHECK(cudaFree(state->d_lbfgs_y));
-  if (state->d_lbfgs_q)       CUDA_CHECK(cudaFree(state->d_lbfgs_q));
-  if (state->d_lbfgs_z)       CUDA_CHECK(cudaFree(state->d_lbfgs_z));
-  if (state->d_lbfgs_rho)     CUDA_CHECK(cudaFree(state->d_lbfgs_rho));
-  if (state->d_lbfgs_alpha)   CUDA_CHECK(cudaFree(state->d_lbfgs_alpha));
-  if (state->d_lbfgs_scratch) CUDA_CHECK(cudaFree(state->d_lbfgs_scratch));
+  if (state->d_lbfgs_S)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_S));
+  if (state->d_lbfgs_Y)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_Y));
+  if (state->d_lbfgs_R_old)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_R_old));
+  if (state->d_lbfgs_Grad_old)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_Grad_old));
+  if (state->d_lbfgs_s)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_s));
+  if (state->d_lbfgs_y)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_y));
+  if (state->d_lbfgs_q)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_q));
+  if (state->d_lbfgs_z)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_z));
+  if (state->d_lbfgs_rho)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_rho));
+  if (state->d_lbfgs_alpha)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_alpha));
+  if (state->d_lbfgs_scratch)
+    CUDA_CHECK(cudaFree(state->d_lbfgs_scratch));
 
   // ---- State-level cuSPARSE descriptors ----
-  if (state->matA)           cusparseDestroySpMat(state->matA);
-  if (state->matAt)          cusparseDestroySpMat(state->matAt);
-  if (state->vecObj)         cusparseDestroySpVec(state->vecObj);
-  if (state->vec_primal_sol) cusparseDestroyDnVec(state->vec_primal_sol);
-  if (state->vec_dual_sol)   cusparseDestroyDnVec(state->vec_dual_sol);
-  if (state->vec_q1)         cusparseDestroyDnVec(state->vec_q1);
-  if (state->vec_primal_prod)cusparseDestroyDnVec(state->vec_primal_prod);
-  if (state->vec_dual_prod)  cusparseDestroyDnVec(state->vec_dual_prod);
+  if (state->matA)
+    cusparseDestroySpMat(state->matA);
+  if (state->matAt)
+    cusparseDestroySpMat(state->matAt);
+  if (state->vecObj)
+    cusparseDestroySpVec(state->vecObj);
+  if (state->vec_primal_sol)
+    cusparseDestroyDnVec(state->vec_primal_sol);
+  if (state->vec_dual_sol)
+    cusparseDestroyDnVec(state->vec_dual_sol);
+  if (state->vec_q1)
+    cusparseDestroyDnVec(state->vec_q1);
+  if (state->vec_primal_prod)
+    cusparseDestroyDnVec(state->vec_primal_prod);
+  if (state->vec_dual_prod)
+    cusparseDestroyDnVec(state->vec_dual_prod);
 
   // ---- Constraint matrices ----
   free_sparse_csr(state->constraint_matrix);
@@ -1583,7 +1691,8 @@ void free_solver_state(cardal_sdp_solver_state_t *state) {
       CUDA_CHECK(cudaFree(state->objective_vector_sparse->val));
     free(state->objective_vector_sparse);
   }
-  if (state->right_hand_side) CUDA_CHECK(cudaFree(state->right_hand_side));
+  if (state->right_hand_side)
+    CUDA_CHECK(cudaFree(state->right_hand_side));
 
   // ---- Cone stream pool ----
   for (int i = 0; i < state->cone_stream_pool_size; i++) {
@@ -1592,8 +1701,10 @@ void free_solver_state(cardal_sdp_solver_state_t *state) {
   }
 
   // ---- cuSPARSE / cuBLAS handles ----
-  if (state->sparse_handle) cusparseDestroy(state->sparse_handle);
-  if (state->blas_handle)   cublasDestroy(state->blas_handle);
+  if (state->sparse_handle)
+    cusparseDestroy(state->sparse_handle);
+  if (state->blas_handle)
+    cublasDestroy(state->blas_handle);
 
   // ---- Host arrays ----
   free(state->blk_dims);

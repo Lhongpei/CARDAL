@@ -47,6 +47,26 @@ typedef struct {
 
 typedef lp_constraint_t free_constraint_t;
 
+/* Signed low-rank PSD-block data.
+ *
+ * Each column j represents
+ *
+ *   weight[j] * factor_j * factor_j^T
+ *
+ * in PSD block cone_ind[j]. constraint_ind[j] is -1 for an objective
+ * contribution and otherwise identifies an equality constraint. Factors are
+ * packed consecutively; factor_ptr[j + 1] - factor_ptr[j] equals the
+ * corresponding cone dimension.
+ */
+typedef struct {
+  int num_columns;
+  int *constraint_ind;
+  int *cone_ind;
+  long long *factor_ptr;
+  double *factor_values;
+  double *weights;
+} symmetric_low_rank_data_t;
+
 typedef struct {
   // --- Data Pointers ---
   psd_cone_constraint_t *psd_cone_constraints;
@@ -59,6 +79,8 @@ typedef struct {
   // Unrestricted real variables
   free_constraint_t *free_constraints;
   double *free_objective;
+
+  symmetric_low_rank_data_t *low_rank_data;
 
   double *right_hand_side; // Vector b
   int *blk_dims;           // Block dimensions
@@ -117,6 +139,8 @@ typedef struct {
   int free_dim;
   int free_start_idx;
   double *free_objective_vector;
+
+  symmetric_low_rank_data_t *low_rank_data;
 
   double *right_hand_side;
 

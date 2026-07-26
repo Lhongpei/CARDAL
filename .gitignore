@@ -56,7 +56,7 @@ dkms.conf
 *.dwo
 
 # ignored files
-build/*
+/build*/
 /dist/
 test/*
 /.vscode
